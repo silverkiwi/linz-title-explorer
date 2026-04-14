@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "linz-webapp",
+      "runtimeExecutable": "/Users/adrianwhite/linz/webapp/.venv/bin/python",
+      "runtimeArgs": ["/Users/adrianwhite/linz/webapp/app.py"],
+      "port": 8080
+    }
+  ]
+}

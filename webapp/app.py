@@ -30,7 +30,9 @@ def _load_private_key():
             pem = f.read()
     return serialization.load_pem_private_key(pem, password=None)
 
-TITLE_RE = re.compile(r"^[A-Za-z0-9./_-]+$")
+# Title numbers can contain spaces, commas, parens, etc (old paper title formats).
+# Security is handled by _sql_literal(); we just block null bytes and raw quotes.
+TITLE_RE = re.compile(r"^[^\x00\n\r'\"\\]{1,100}$")
 
 SEARCH_SORT_COLUMNS = {
     "title_no":          "TITLE_NO",

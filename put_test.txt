@@ -1,0 +1,1 @@
+snowflake put test
