@@ -130,12 +130,17 @@ def _build_search_query(q: str, limit: int, offset: int, sort_by: str, sort_dir:
     SELECT
         TITLE_NO,
         TITLE_STATUS,
+        TITLE_STATUS_DESC,
         TITLE_TYPE,
+        TITLE_TYPE_DESC,
         REGISTER_TYPE,
+        REGISTER_TYPE_DESC,
         ISSUE_DATE,
         IS_CURRENT,
         IS_ACTIVE,
         LATEST_INST_NO          AS latest_instrument_no,
+        LATEST_INST_TYPE        AS latest_instrument_type,
+        LATEST_INST_TYPE_DESC   AS latest_instrument_type_desc,
         LATEST_INSTRUMENT_DATE  AS latest_lodged_date,
         INSTRUMENT_COUNT,
         ENCUMBRANCE_COUNT,
@@ -243,11 +248,16 @@ def title_detail(title_no: str):
         return jsonify({"error": "Invalid title_no format"}), 400
     out = _query(f"""
         SELECT
-            TITLE_NO, TITLE_STATUS, TITLE_TYPE, REGISTER_TYPE, ISSUE_DATE,
-            IS_CURRENT, IS_ACTIVE, GUARANTEE_STATUS, MAORI_LAND, LDT_LOC_ID,
-            LAND_DISTRICT_NAME, ESTATE_COUNT, CURRENT_ESTATE_COUNT, ESTATE_TYPES,
+            TITLE_NO,
+            TITLE_STATUS, TITLE_STATUS_DESC,
+            TITLE_TYPE, TITLE_TYPE_DESC,
+            REGISTER_TYPE, REGISTER_TYPE_DESC,
+            ISSUE_DATE, IS_CURRENT, IS_ACTIVE,
+            GUARANTEE_STATUS, MAORI_LAND, LDT_LOC_ID, LAND_DISTRICT_NAME,
+            ESTATE_COUNT, CURRENT_ESTATE_COUNT, ESTATE_TYPES,
             PROPRIETOR_COUNT, PROPRIETORS,
             INSTRUMENT_COUNT, LATEST_INSTRUMENT_DATE, LATEST_INST_NO,
+            LATEST_INST_TYPE, LATEST_INST_TYPE_DESC,
             ENCUMBRANCE_COUNT, CURRENT_ENCUMBRANCE_COUNT,
             PARCEL_COUNT, PRIMARY_ADDRESS, APPELLATIONS,
             PRIOR_TITLE_NO, REFRESHED_AT

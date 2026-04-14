@@ -149,11 +149,12 @@
       // ── Utils ──────────────────────────────────────────────────────────
       function esc(v){ return (v ?? '').toString().replace(/[&<>"']/g, s=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[s])); }
 
-      function badge(status){
+      function badge(status, desc){
         const s = (status || '').toUpperCase();
-        if (s === 'LIVE') return `<span class='badge badge-live'>LIVE</span>`;
-        if (s === 'HIST' || s === 'CNCV' || s === 'CNCD') return `<span class='badge badge-hist'>${esc(s)}</span>`;
-        return `<span class='badge badge-other'>${esc(s)}</span>`;
+        const label = desc || s;
+        if (s === 'LIVE') return `<span class='badge badge-live'>${esc(label)}</span>`;
+        if (s === 'HIST' || s === 'CNCV' || s === 'CNCD') return `<span class='badge badge-hist'>${esc(label)}</span>`;
+        return `<span class='badge badge-other'>${esc(label)}</span>`;
       }
 
       // ── Mode switching ─────────────────────────────────────────────────
@@ -204,14 +205,14 @@
         const appel = detail.appellations ? `<div class='row'><b>Appellation:</b> ${esc(detail.appellations)}</div>` : '';
         const owner = detail.proprietors   ? `<div class='row'><b>Owner(s):</b> ${esc(detail.proprietors)}</div>` : '';
         document.getElementById('panel').innerHTML = `
-          <div class='row'><b>Title No:</b> ${esc(detail.title_no)} ${badge(detail.title_status)}</div>
-          <div class='row'><b>Type:</b> ${esc(detail.title_type || '—')} | <b>Register:</b> ${esc(detail.register_type || '—')} | <b>Guarantee:</b> ${esc(detail.guarantee_status || '—')}</div>
+          <div class='row'><b>Title No:</b> ${esc(detail.title_no)} ${badge(detail.title_status, detail.title_status_desc)}</div>
+          <div class='row'><b>Type:</b> ${esc(detail.title_type_desc || detail.title_type || '—')} | <b>Register:</b> ${esc(detail.register_type_desc || detail.register_type || '—')} | <b>Guarantee:</b> ${esc(detail.guarantee_status || '—')}</div>
           <div class='row'><b>Issue Date:</b> ${esc(detail.issue_date || '—')} | <b>Māori Land:</b> ${esc(detail.maori_land || 'N')}</div>
           <div class='row'><b>Land District:</b> ${esc(detail.land_district_name || detail.ldt_loc_id || '—')}</div>
           <div class='row'><b>Estate Types:</b> ${esc(detail.estate_types || '—')}</div>
           ${owner}
           ${appel}
-          <div class='row'><b>Latest Instrument:</b> ${esc(detail.latest_inst_no || '—')} — ${esc(detail.latest_instrument_date || '—')}</div>
+          <div class='row'><b>Latest Instrument:</b> ${esc(detail.latest_inst_no || '—')} ${detail.latest_inst_type_desc ? `<span class='muted'>(${esc(detail.latest_inst_type_desc)})</span>` : ''} — ${esc(detail.latest_instrument_date ? detail.latest_instrument_date.slice(0,10) : '—')}</div>
           <div class='row'><b>Prior Title:</b> ${detail.prior_title_no ? `<a href='#' onclick="window.pickTitle('${esc(detail.prior_title_no)}');return false">${esc(detail.prior_title_no)}</a>` : '—'}</div>
           ${addr ? `<div class='row'><b>Address:</b><br/>${addr}</div>` : ''}
         `;
@@ -342,7 +343,7 @@
         lineage       = lin;
         lineageGraph  = ling;
 
-        document.getElementById('header').innerHTML = `<b>${esc(detail.title_no)}</b> ${badge(detail.title_status)} <span class='muted'>${esc(detail.title_type || '')} • ${esc(detail.land_district_name || '')}</span>`;
+        document.getElementById('header').innerHTML = `<b>${esc(detail.title_no)}</b> ${badge(detail.title_status, detail.title_status_desc)} <span class='muted'>${esc(detail.title_type_desc || detail.title_type || '')} • ${esc(detail.land_district_name || '')}</span>`;
         renderKpis();
         setActiveTab('summary');
         renderSummary();
@@ -367,8 +368,8 @@
           const div = document.createElement('div');
           div.className = 'item';
           div.innerHTML = `
-            <div class='title-tag'>${esc(row.title_no)} ${badge(row.title_status)}</div>
-            <div class='muted'>${esc(row.title_type || '')} • ${esc(row.register_type || '')} • ${esc(row.issue_date ? row.issue_date.slice(0,10) : '—')}</div>
+            <div class='title-tag'>${esc(row.title_no)} ${badge(row.title_status, row.title_status_desc)}</div>
+            <div class='muted'>${esc(row.title_type_desc || row.title_type || '')} • ${esc(row.register_type_desc || row.register_type || '')} • ${esc(row.issue_date ? row.issue_date.slice(0,10) : '—')}</div>
             ${row.primary_address ? `<div class='addr-tag'>📍 ${esc(row.primary_address)}</div>` : ''}
           `;
           div.onclick = () => {
