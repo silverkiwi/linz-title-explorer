@@ -1,0 +1,31 @@
+# Data files (large — loaded directly to Snowflake stage)
+*.zip
+*.pkg
+lds-world-14layers-SHP/
+lds-world-7layers-SHP/
+data/
+
+# Secrets
+webapp/.env
+webapp/keys/
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Notebooks
+.ipynb_checkpoints/
+
+# macOS
+.DS_Store
+
+# Logs
+*.log
+/tmp/
