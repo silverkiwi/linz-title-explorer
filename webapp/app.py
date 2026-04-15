@@ -191,6 +191,15 @@ def _strip_macrons(text: str) -> str:
     )
 
 
+# Common NZ road-type suffixes that appear at the end of a user's address
+# query but are absent from the ROAD_NAME column in DIM_ADDRESS.
+_ROAD_TYPE_SUFFIXES = {
+    "road", "street", "avenue", "drive", "place", "crescent", "lane",
+    "way", "court", "close", "terrace", "boulevard", "highway", "parade",
+    "grove", "rise", "rd", "st", "ave", "dr", "pl", "cr", "ln",
+}
+
+
 def _build_address_search_query(q: str, limit: int) -> str:
     where = ""
     if q:
@@ -211,20 +220,29 @@ def _build_address_search_query(q: str, limit: int) -> str:
         # Pattern 3: component-based fallback for addresses stored in LINZ with
         # the unit letter *before* the number (e.g. "A/43 ORANGI KAUPAPA ROAD"
         # or "FLAT A 43 ORANGI KAUPAPA ROAD") — these never match a FULL_ADDRESS
-        # LIKE on "43a …".  Parse "43A Road Name" → STREET_NUMBER='43',
-        # UNIT_VALUE='A', ROAD_NAME LIKE '%road name%' (road-type word dropped).
+        # LIKE on "43a …".  Parse "43A Road Name" into components and search the
+        # individual columns directly.
         m = re.match(r"^(\d+)\s*([a-z])\s+(.+)$", ql)
         if m:
             num, unit, road = m.group(1), m.group(2), m.group(3)
-            # Drop the trailing road-type word (Road, Street, …) so the pattern
-            # matches the ROAD_NAME column, which stores only the name part.
+            # Only strip the trailing word when it is a known road-type suffix
+            # (Road, Street, …).  If the user omits the road type (e.g. just
+            # "43a Orangi Kaupapa") we must keep all words so we don't drop a
+            # genuine part of the road name.
             road_words = road.split()
-            road_name = " ".join(road_words[:-1]) if len(road_words) > 1 else road
+            if len(road_words) > 1 and road_words[-1] in _ROAD_TYPE_SUFFIXES:
+                road_name = " ".join(road_words[:-1])
+            else:
+                road_name = road
             road_expr = f"LOWER(TRANSLATE(ROAD_NAME, {_SF_MACRON_FROM}, {_SF_MACRON_TO}))"
+            road_lit = _sql_literal(f"%{road_name}%")
+            # LINZ may store the alpha suffix in UNIT_VALUE (STREET_NUMBER='43',
+            # UNIT_VALUE='A') or combined in STREET_NUMBER ('43A').  Cover both.
             component_cond = (
-                f"(STREET_NUMBER = {_sql_literal(num)}"
-                f" AND LOWER(COALESCE(UNIT_VALUE, '')) = {_sql_literal(unit)}"
-                f" AND {road_expr} LIKE {_sql_literal(f'%{road_name}%')})"
+                f"({road_expr} LIKE {road_lit}"
+                f" AND (STREET_NUMBER = {_sql_literal(num)}"
+                f"       AND LOWER(COALESCE(UNIT_VALUE, '')) = {_sql_literal(unit)}"
+                f"      OR LOWER(STREET_NUMBER) = {_sql_literal(num + unit)}))"
             )
             addr_cond = f"({addr_cond} OR {component_cond})"
 
