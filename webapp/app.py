@@ -4,6 +4,7 @@ import io
 import os
 import re
 from contextlib import contextmanager
+from urllib.parse import unquote
 
 import snowflake.connector
 from cryptography.hazmat.primitives import serialization
@@ -30,9 +31,16 @@ def _load_private_key():
             pem = f.read()
     return serialization.load_pem_private_key(pem, password=None)
 
-# Title numbers can contain spaces, commas, parens, etc (old paper title formats).
+# Title numbers can contain spaces, commas, parens, slashes, etc (old paper title formats).
 # Security is handled by _sql_literal(); we just block null bytes and raw quotes.
 TITLE_RE = re.compile(r"^[^\x00\n\r'\"\\]{1,100}$")
+
+
+def _parse_title_no(raw: str) -> str | None:
+    """URL-decode (handles %2F from browsers) and validate title_no.
+    Returns the decoded title string, or None if it fails validation."""
+    t = unquote(raw)
+    return t if TITLE_RE.match(t) else None
 
 SEARCH_SORT_COLUMNS = {
     "title_no":          "TITLE_NO",
@@ -246,7 +254,8 @@ def address_search():
 
 @app.get("/api/title/<path:title_no>")
 def title_detail(title_no: str):
-    if not TITLE_RE.match(title_no):
+    title_no = _parse_title_no(title_no)
+    if title_no is None:
         return jsonify({"error": "Invalid title_no format"}), 400
     out = _query(f"""
         SELECT
@@ -274,7 +283,8 @@ def title_detail(title_no: str):
 
 @app.get("/api/title/<path:title_no>/instruments")
 def title_instruments(title_no: str):
-    if not TITLE_RE.match(title_no):
+    title_no = _parse_title_no(title_no)
+    if title_no is None:
         return jsonify({"error": "Invalid title_no format"}), 400
     items = _query(f"""
         SELECT
@@ -291,7 +301,8 @@ def title_instruments(title_no: str):
 
 @app.get("/api/title/<path:title_no>/instruments.csv")
 def title_instruments_csv(title_no: str):
-    if not TITLE_RE.match(title_no):
+    title_no = _parse_title_no(title_no)
+    if title_no is None:
         return jsonify({"error": "Invalid title_no format"}), 400
     items = _query(f"""
         SELECT
@@ -308,7 +319,8 @@ def title_instruments_csv(title_no: str):
 
 @app.get("/api/title/<path:title_no>/encumbrances")
 def title_encumbrances(title_no: str):
-    if not TITLE_RE.match(title_no):
+    title_no = _parse_title_no(title_no)
+    if title_no is None:
         return jsonify({"error": "Invalid title_no format"}), 400
     items = _query(f"""
         SELECT
@@ -326,7 +338,8 @@ def title_encumbrances(title_no: str):
 
 @app.get("/api/title/<path:title_no>/encumbrances.csv")
 def title_encumbrances_csv(title_no: str):
-    if not TITLE_RE.match(title_no):
+    title_no = _parse_title_no(title_no)
+    if title_no is None:
         return jsonify({"error": "Invalid title_no format"}), 400
     items = _query(f"""
         SELECT
@@ -343,7 +356,8 @@ def title_encumbrances_csv(title_no: str):
 
 @app.get("/api/title/<path:title_no>/address")
 def title_address(title_no: str):
-    if not TITLE_RE.match(title_no):
+    title_no = _parse_title_no(title_no)
+    if title_no is None:
         return jsonify({"error": "Invalid title_no format"}), 400
     items = _query(f"""
         SELECT
@@ -360,7 +374,8 @@ def title_address(title_no: str):
 
 @app.get("/api/title/<path:title_no>/lineage")
 def title_lineage(title_no: str):
-    if not TITLE_RE.match(title_no):
+    title_no = _parse_title_no(title_no)
+    if title_no is None:
         return jsonify({"error": "Invalid title_no format"}), 400
     prior = _query(f"""
         SELECT PRIOR_TITLE_NO AS related_title, STATUS, PRIOR_TITLE_STATUS, PRIOR_ISSUE_DATE
@@ -385,7 +400,8 @@ def title_lineage(title_no: str):
 
 @app.get("/api/title/<path:title_no>/lineage/graph")
 def title_lineage_graph(title_no: str):
-    if not TITLE_RE.match(title_no):
+    title_no = _parse_title_no(title_no)
+    if title_no is None:
         return jsonify({"error": "Invalid title_no format"}), 400
     prior = _query(f"""
         SELECT PRIOR_TITLE_NO AS related_title FROM L.GOLD.V_TITLE_LINEAGE
@@ -471,7 +487,8 @@ def instrument_search_csv():
 
 @app.get("/api/instrument/<path:inst_no>")
 def instrument_detail(inst_no: str):
-    if not TITLE_RE.match(inst_no):
+    inst_no = _parse_title_no(inst_no)
+    if inst_no is None:
         return jsonify({"error": "Invalid instrument format"}), 400
     items = _query(f"""
         SELECT
