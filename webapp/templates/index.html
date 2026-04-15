@@ -100,12 +100,12 @@
 
       <!-- Search mode toggle -->
       <div class="search-modes">
-        <button class="mode-btn active" id="modeTitleBtn" onclick="setMode('title')">Title / Instrument Search</button>
-        <button class="mode-btn" id="modeAddrBtn" onclick="setMode('address')">🏠 Address Search</button>
+        <button class="mode-btn" id="modeTitleBtn" onclick="setMode('title')">Title / Instrument Search</button>
+        <button class="mode-btn active" id="modeAddrBtn" onclick="setMode('address')">🏠 Address Search</button>
       </div>
 
       <!-- Title search toolbar -->
-      <div class="card" id="titleToolbar">
+      <div class="card" id="titleToolbar" style="display:none">
         <div class="toolbar">
           <input id="q" placeholder="Search title no, address, appellation, owner..." />
           <select id="sortBy">
@@ -128,7 +128,7 @@
       </div>
 
       <!-- Address search toolbar -->
-      <div class="card" id="addrToolbar" style="display:none">
+      <div class="card" id="addrToolbar">
         <div class="addr-toolbar">
           <input id="addrQ" placeholder="e.g.  42 Willis Street, Wellington  or  Thorndon  or  6011" />
           <button class="btn" onclick="searchByAddress()">Search</button>
@@ -506,8 +506,8 @@
         };
       });
 
-      // Initial load
-      search();
+      // Start in address search mode — no DB query until user searches
+      setMode('address');
     </script>
   </body>
 </html>
