@@ -510,6 +510,42 @@ def title_lineage_graph():
     return jsonify({"title_no": title_no, "nodes": nodes, "edges": edges})
 
 
+@app.get("/api/title/lineage/ancestors")
+def title_lineage_ancestors():
+    title_no, err = _require_title_no()
+    if err:
+        return err
+    rows = _query(f"""
+        WITH RECURSIVE ancestry(title_no, depth) AS (
+            -- Direct predecessors of the requested title
+            SELECT th.TTL_TITLE_NO_PRIOR, 1
+            FROM SILVER.TITLE_HIERARCHY th
+            WHERE th.TTL_TITLE_NO_FLW = {_sql_literal(title_no)}
+              AND th.STATUS = 'CURR'
+            UNION ALL
+            -- Walk upwards one generation at a time
+            SELECT th.TTL_TITLE_NO_PRIOR, a.depth + 1
+            FROM ancestry a
+            JOIN SILVER.TITLE_HIERARCHY th
+              ON th.TTL_TITLE_NO_FLW = a.title_no
+             AND th.STATUS = 'CURR'
+            WHERE a.depth < 100
+        )
+        SELECT
+            a.title_no,
+            MIN(a.depth)   AS depth,
+            t.STATUS       AS title_status,
+            t.ISSUE_DATE   AS issue_date,
+            t.TYPE         AS title_type,
+            t.IS_CURRENT
+        FROM ancestry a
+        JOIN SILVER.TITLE t ON t.TITLE_NO = a.title_no
+        GROUP BY a.title_no, t.STATUS, t.ISSUE_DATE, t.TYPE, t.IS_CURRENT
+        ORDER BY MIN(a.depth) ASC
+    """)
+    return jsonify({"title_no": title_no, "count": len(rows), "ancestors": rows})
+
+
 @app.get("/api/instruments/search")
 def instrument_search():
     q     = (request.args.get("q") or "").strip()
