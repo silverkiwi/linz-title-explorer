@@ -3,6 +3,7 @@ import csv
 import io
 import os
 import re
+import unicodedata
 from contextlib import contextmanager
 from urllib.parse import unquote
 
@@ -173,22 +174,61 @@ def _build_search_query(q: str, limit: int, offset: int, sort_by: str, sort_dir:
 # Address search against GOLD.DIM_ADDRESS
 # ---------------------------------------------------------------------------
 
+
+# Māori vowels with macrons and their ASCII equivalents, used for both the
+# Python-side query normalisation and the Snowflake TRANSLATE() expression.
+_MACRON_FROM = "āēīōūĀĒĪŌŪ"
+_MACRON_TO   = "aeiouAEIOU"
+# Snowflake TRANSLATE() literal arguments (SQL string constants)
+_SF_MACRON_FROM = _sql_literal(_MACRON_FROM)
+_SF_MACRON_TO   = _sql_literal(_MACRON_TO)
+
+
+def _strip_macrons(text: str) -> str:
+    """Replace Māori-macron vowels with their plain ASCII equivalents."""
+    return unicodedata.normalize("NFC", text).translate(
+        str.maketrans(_MACRON_FROM, _MACRON_TO)
+    )
+
+
 def _build_address_search_query(q: str, limit: int) -> str:
     where = ""
     if q:
-        ql = q.lower()
-        # LINZ stores a space between a street number and its alpha suffix
-        # (e.g. "43 A ORANGI KAUPAPA ROAD"), so a user typing "43A" would
-        # never match. Generate an alternative pattern with that space inserted
-        # and OR the two conditions together.
-        ql_spaced = re.sub(r"(\d)([a-z])", r"\1 \2", ql)
+        # Normalise query: strip Māori macrons, lowercase.
+        ql = _strip_macrons(q).lower()
+        # DB-side expression that normalises FULL_ADDRESS the same way.
+        db_expr = f"LOWER(TRANSLATE(FULL_ADDRESS, {_SF_MACRON_FROM}, {_SF_MACRON_TO}))"
+
+        # Pattern 1: user's query verbatim (handles "43 A Orangi Kaupapa Road").
         qlit = _sql_literal(f"%{ql}%")
+        addr_cond = f"{db_expr} LIKE {qlit}"
+
+        # Pattern 2: spaced digit-letter boundary (handles "43A" → "43 A").
+        ql_spaced = re.sub(r"(\d)([a-z])", r"\1 \2", ql)
         if ql_spaced != ql:
-            qlit_spaced = _sql_literal(f"%{ql_spaced}%")
-            addr_cond = f"(LOWER(FULL_ADDRESS) LIKE {qlit} OR LOWER(FULL_ADDRESS) LIKE {qlit_spaced})"
-        else:
-            addr_cond = f"LOWER(FULL_ADDRESS) LIKE {qlit}"
-        where = f"WHERE {addr_cond} AND TITLE_NO IS NOT NULL"
+            addr_cond = f"({addr_cond} OR {db_expr} LIKE {_sql_literal(f'%{ql_spaced}%')})"
+
+        # Pattern 3: component-based fallback for addresses stored in LINZ with
+        # the unit letter *before* the number (e.g. "A/43 ORANGI KAUPAPA ROAD"
+        # or "FLAT A 43 ORANGI KAUPAPA ROAD") — these never match a FULL_ADDRESS
+        # LIKE on "43a …".  Parse "43A Road Name" → STREET_NUMBER='43',
+        # UNIT_VALUE='A', ROAD_NAME LIKE '%road name%' (road-type word dropped).
+        m = re.match(r"^(\d+)\s*([a-z])\s+(.+)$", ql)
+        if m:
+            num, unit, road = m.group(1), m.group(2), m.group(3)
+            # Drop the trailing road-type word (Road, Street, …) so the pattern
+            # matches the ROAD_NAME column, which stores only the name part.
+            road_words = road.split()
+            road_name = " ".join(road_words[:-1]) if len(road_words) > 1 else road
+            road_expr = f"LOWER(TRANSLATE(ROAD_NAME, {_SF_MACRON_FROM}, {_SF_MACRON_TO}))"
+            component_cond = (
+                f"(STREET_NUMBER = {_sql_literal(num)}"
+                f" AND LOWER(COALESCE(UNIT_VALUE, '')) = {_sql_literal(unit)}"
+                f" AND {road_expr} LIKE {_sql_literal(f'%{road_name}%')})"
+            )
+            addr_cond = f"({addr_cond} OR {component_cond})"
+
+        where = f"WHERE ({addr_cond}) AND TITLE_NO IS NOT NULL"
     else:
         where = "WHERE TITLE_NO IS NOT NULL"
 
