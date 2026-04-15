@@ -248,16 +248,17 @@ WITH current_components AS (
 pivoted AS (
     SELECT
         address_id,
-        MAX(CASE WHEN component_type = 'Unit Type'           THEN component_value END) AS unit_type,
-        MAX(CASE WHEN component_type = 'Unit Value'          THEN component_value END) AS unit_value,
-        MAX(CASE WHEN component_type = 'Address Number'      THEN component_value END) AS street_number,
-        MAX(CASE WHEN component_type = 'Address Number High' THEN component_value END) AS street_number_high,
-        MAX(CASE WHEN component_type = 'Road Name'           THEN component_value END) AS road_name,
-        MAX(CASE WHEN component_type = 'Road Type Name'      THEN component_value END) AS road_type,
+        MAX(CASE WHEN component_type = 'Unit Type'             THEN component_value END) AS unit_type,
+        MAX(CASE WHEN component_type = 'Unit Value'            THEN component_value END) AS unit_value,
+        MAX(CASE WHEN component_type = 'Address Number'        THEN component_value END) AS street_number,
+        MAX(CASE WHEN component_type = 'Address Number High'   THEN component_value END) AS street_number_high,
+        MAX(CASE WHEN component_type = 'Address Number Suffix' THEN component_value END) AS street_number_suffix,
+        MAX(CASE WHEN component_type = 'Road Name'             THEN component_value END) AS road_name,
+        MAX(CASE WHEN component_type = 'Road Type Name'        THEN component_value END) AS road_type,
         MAX(CASE WHEN component_type IN ('Road Suffix', 'Road Suffix Name') THEN component_value END) AS road_suffix,
-        MAX(CASE WHEN component_type = 'Suburb/Locality Name' THEN component_value END) AS suburb,
-        MAX(CASE WHEN component_type = 'Town/City Name'      THEN component_value END) AS city,
-        MAX(CASE WHEN component_type = 'Postcode'            THEN component_value END) AS postcode
+        MAX(CASE WHEN component_type = 'Suburb/Locality Name'  THEN component_value END) AS suburb,
+        MAX(CASE WHEN component_type = 'Town/City Name'        THEN component_value END) AS city,
+        MAX(CASE WHEN component_type = 'Postcode'              THEN component_value END) AS postcode
     FROM current_components
     GROUP BY address_id
 ),
@@ -266,11 +267,14 @@ pivoted AS (
 built AS (
     SELECT
         address_id,
-        unit_type, unit_value, street_number, street_number_high,
+        unit_type, unit_value, street_number, street_number_high, street_number_suffix,
         road_name, road_type, road_suffix, suburb, city, postcode,
         NULLIF(TRIM(ARRAY_TO_STRING(ARRAY_COMPACT(ARRAY_CONSTRUCT(
             CASE WHEN unit_type IS NOT NULL THEN unit_type || ' ' || COALESCE(unit_value,'') END,
-            CASE WHEN street_number_high IS NOT NULL THEN street_number || '/' || street_number_high ELSE street_number END,
+            -- Append suffix directly to number (43 + A → 43A); ranges use slash (43/47)
+            CASE WHEN street_number_high   IS NOT NULL THEN street_number || '/' || street_number_high
+                 WHEN street_number_suffix IS NOT NULL THEN street_number || street_number_suffix
+                 ELSE street_number END,
             road_name,
             road_type,
             road_suffix
@@ -285,6 +289,7 @@ SELECT
     b.unit_value,
     b.street_number,
     b.street_number_high,
+    b.street_number_suffix,
     b.road_name,
     b.road_type,
     b.suburb,
@@ -313,6 +318,7 @@ SELECT DISTINCT
     unit_value,
     street_number,
     street_number_high,
+    street_number_suffix,
     road_name,
     road_type,
     suburb,
