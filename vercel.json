@@ -2,7 +2,13 @@
   "builds": [
     {
       "src": "webapp/app.py",
-      "use": "@vercel/python"
+      "use": "@vercel/python",
+      "config": {
+        "includeFiles": [
+          "webapp/templates/**",
+          "webapp/static/**"
+        ]
+      }
     }
   ],
   "routes": [
