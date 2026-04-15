@@ -52,6 +52,33 @@ SEARCH_SORT_COLUMNS = {
 }
 
 
+SEARCH_SELECT_COLUMNS = """
+        TITLE_NO,
+        TITLE_STATUS,
+        TITLE_STATUS_DESC,
+        TITLE_TYPE,
+        TITLE_TYPE_DESC,
+        REGISTER_TYPE,
+        REGISTER_TYPE_DESC,
+        ISSUE_DATE,
+        IS_CURRENT,
+        IS_ACTIVE,
+        LATEST_INST_NO          AS latest_instrument_no,
+        LATEST_INST_TYPE        AS latest_instrument_type,
+        LATEST_INST_TYPE_DESC   AS latest_instrument_type_desc,
+        LATEST_INSTRUMENT_DATE  AS latest_lodged_date,
+        INSTRUMENT_COUNT,
+        ENCUMBRANCE_COUNT,
+        ESTATE_COUNT,
+        ESTATE_TYPES,
+        PARCEL_COUNT,
+        PRIMARY_ADDRESS,
+        APPELLATIONS,
+        PRIOR_TITLE_NO,
+        REFRESHED_AT            AS updated_at
+"""
+
+
 @contextmanager
 def get_conn():
     conn = snowflake.connector.connect(
@@ -123,6 +150,12 @@ def _to_csv_response(rows: list, filename: str) -> Response:
 # Title search against GOLD.V_TITLE_360
 # ---------------------------------------------------------------------------
 
+def _search_sort_clause(sort_by: str, sort_dir: str) -> tuple[str, str]:
+    safe_col = SEARCH_SORT_COLUMNS.get(sort_by, "ISSUE_DATE")
+    safe_dir = "ASC" if sort_dir.upper() == "ASC" else "DESC"
+    return safe_col, safe_dir
+
+
 def _build_search_query(q: str, limit: int, offset: int, sort_by: str, sort_dir: str) -> str:
     where = ""
     if q:
@@ -133,39 +166,59 @@ def _build_search_query(q: str, limit: int, offset: int, sort_by: str, sort_dir:
                   OR LOWER(COALESCE(PROPRIETORS, ''))      LIKE {qlit}
                   OR LOWER(COALESCE(ESTATE_TYPES, ''))     LIKE {qlit}"""
 
-    safe_col = SEARCH_SORT_COLUMNS.get(sort_by, "ISSUE_DATE")
-    safe_dir = "ASC" if sort_dir.upper() == "ASC" else "DESC"
+    safe_col, safe_dir = _search_sort_clause(sort_by, sort_dir)
 
     return f"""
     SELECT
-        TITLE_NO,
-        TITLE_STATUS,
-        TITLE_STATUS_DESC,
-        TITLE_TYPE,
-        TITLE_TYPE_DESC,
-        REGISTER_TYPE,
-        REGISTER_TYPE_DESC,
-        ISSUE_DATE,
-        IS_CURRENT,
-        IS_ACTIVE,
-        LATEST_INST_NO          AS latest_instrument_no,
-        LATEST_INST_TYPE        AS latest_instrument_type,
-        LATEST_INST_TYPE_DESC   AS latest_instrument_type_desc,
-        LATEST_INSTRUMENT_DATE  AS latest_lodged_date,
-        INSTRUMENT_COUNT,
-        ENCUMBRANCE_COUNT,
-        ESTATE_COUNT,
-        ESTATE_TYPES,
-        PARCEL_COUNT,
-        PRIMARY_ADDRESS,
-        APPELLATIONS,
-        PRIOR_TITLE_NO,
-        REFRESHED_AT            AS updated_at
+        {SEARCH_SELECT_COLUMNS}
     FROM L.GOLD.V_TITLE_360
     {where}
     ORDER BY IS_CURRENT DESC NULLS LAST, {safe_col} {safe_dir} NULLS LAST, TITLE_NO ASC
     LIMIT {limit}
     OFFSET {offset}
+    """
+
+
+def _build_search_query_fast(q: str, limit: int, sort_by: str, sort_dir: str) -> str:
+    qlit = _sql_literal(f"%{q.lower()}%")
+    safe_col, safe_dir = _search_sort_clause(sort_by, sort_dir)
+    where = f"""WHERE LOWER(TITLE_NO) LIKE {qlit}
+              OR LOWER(COALESCE(PRIMARY_ADDRESS, '')) LIKE {qlit}"""
+    return f"""
+    SELECT
+        {SEARCH_SELECT_COLUMNS}
+    FROM L.GOLD.V_TITLE_360
+    {where}
+    ORDER BY IS_CURRENT DESC NULLS LAST, {safe_col} {safe_dir} NULLS LAST, TITLE_NO ASC
+    LIMIT {limit}
+    """
+
+
+def _build_search_query_topup(
+    q: str,
+    limit: int,
+    sort_by: str,
+    sort_dir: str,
+    exclude_title_nos: list[str],
+) -> str:
+    qlit = _sql_literal(f"%{q.lower()}%")
+    safe_col, safe_dir = _search_sort_clause(sort_by, sort_dir)
+    excludes = [t for t in exclude_title_nos if t]
+    exclude_clause = ""
+    if excludes:
+        exclude_sql = ", ".join(_sql_literal(t) for t in excludes)
+        exclude_clause = f" AND TITLE_NO NOT IN ({exclude_sql})"
+    return f"""
+    SELECT
+        {SEARCH_SELECT_COLUMNS}
+    FROM L.GOLD.V_TITLE_360
+    WHERE (
+        LOWER(COALESCE(APPELLATIONS, '')) LIKE {qlit}
+        OR LOWER(COALESCE(PROPRIETORS, '')) LIKE {qlit}
+        OR LOWER(COALESCE(ESTATE_TYPES, '')) LIKE {qlit}
+    ){exclude_clause}
+    ORDER BY IS_CURRENT DESC NULLS LAST, {safe_col} {safe_dir} NULLS LAST, TITLE_NO ASC
+    LIMIT {limit}
     """
 
 
@@ -229,7 +282,14 @@ def search():
     offset   = _to_int(request.args.get("offset"),   default=0,   min_v=0, max_v=100_000)
     sort_by  = (request.args.get("sort_by")  or "issue_date").strip().lower()
     sort_dir = (request.args.get("sort_dir") or "desc").strip().upper()
-    out = _query(_build_search_query(q, limit, offset, sort_by, sort_dir))
+    if q and offset == 0:
+        out = _query(_build_search_query_fast(q, limit, sort_by, sort_dir))
+        remaining = limit - len(out)
+        if remaining > 0:
+            excluded = [row.get("title_no") for row in out if row.get("title_no")]
+            out.extend(_query(_build_search_query_topup(q, remaining, sort_by, sort_dir, excluded)))
+    else:
+        out = _query(_build_search_query(q, limit, offset, sort_by, sort_dir))
     return jsonify({"count": len(out), "items": out, "limit": limit, "offset": offset})
 
 
