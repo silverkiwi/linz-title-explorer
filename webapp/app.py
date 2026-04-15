@@ -175,13 +175,12 @@ def _build_search_query(q: str, limit: int, offset: int, sort_by: str, sort_dir:
 # ---------------------------------------------------------------------------
 
 
-# Māori vowels with macrons and their ASCII equivalents, used for both the
-# Python-side query normalisation and the Snowflake TRANSLATE() expression.
+# Māori vowels with macrons and their ASCII equivalents, used for
+# Python-side query normalisation (_strip_macrons).  The stored columns
+# full_address_norm / road_name_norm in DIM_ADDRESS_SEARCH already have the
+# same normalisation applied, so no Snowflake TRANSLATE() is needed at query time.
 _MACRON_FROM = "āēīōūĀĒĪŌŪ"
 _MACRON_TO   = "aeiouAEIOU"
-# Snowflake TRANSLATE() literal arguments (SQL string constants)
-_SF_MACRON_FROM = _sql_literal(_MACRON_FROM)
-_SF_MACRON_TO   = _sql_literal(_MACRON_TO)
 
 
 def _strip_macrons(text: str) -> str:
@@ -201,56 +200,55 @@ _ROAD_TYPE_SUFFIXES = {
 
 
 def _build_address_search_query(q: str, limit: int) -> str:
+    # Query the materialised table (GOLD.DIM_ADDRESS_SEARCH) rather than the
+    # view.  The table pre-computes full_address_norm / road_name_norm /
+    # street_number_norm / unit_value_norm (lowercase + macrons stripped) so:
+    #   • No per-row LOWER(TRANSLATE(...)) expression at query time
+    #   • Snowflake's Search Optimization index (SUBSTRING) can fire, turning
+    #     the leading-wildcard LIKE into an O(log n) lookup instead of a
+    #     full-table scan.
     where = ""
     if q:
-        # Normalise query: strip Māori macrons, lowercase.
+        # Normalise query the same way the stored columns were built.
         ql = _strip_macrons(q).lower()
-        # DB-side expression that normalises FULL_ADDRESS the same way.
-        db_expr = f"LOWER(TRANSLATE(FULL_ADDRESS, {_SF_MACRON_FROM}, {_SF_MACRON_TO}))"
 
-        # Pattern 1: user's query verbatim (handles "43 A Orangi Kaupapa Road").
+        # Pattern 1: verbatim match against pre-normalised full address.
         qlit = _sql_literal(f"%{ql}%")
-        addr_cond = f"{db_expr} LIKE {qlit}"
+        addr_cond = f"FULL_ADDRESS_NORM LIKE {qlit}"
 
-        # Pattern 2: spaced digit-letter boundary (handles "43A" → "43 A").
+        # Pattern 2: spaced digit-letter boundary ("43A" → "43 A").
         ql_spaced = re.sub(r"(\d)([a-z])", r"\1 \2", ql)
         if ql_spaced != ql:
-            addr_cond = f"({addr_cond} OR {db_expr} LIKE {_sql_literal(f'%{ql_spaced}%')})"
+            addr_cond = f"({addr_cond} OR FULL_ADDRESS_NORM LIKE {_sql_literal(f'%{ql_spaced}%')})"
 
         # Pattern 3: component-based fallback for addresses stored in LINZ with
         # the unit letter *before* the number (e.g. "A/43 ORANGI KAUPAPA ROAD"
         # or "FLAT A 43 ORANGI KAUPAPA ROAD") — these never match a FULL_ADDRESS
         # LIKE on "43a …".  Parse "43A Road Name" into components and search the
-        # individual columns directly.
+        # individual pre-normalised columns directly.
         m = re.match(r"^(\d+)\s*([a-z])\s+(.+)$", ql)
         if m:
             num, unit, road = m.group(1), m.group(2), m.group(3)
-            # Only strip the trailing word when it is a known road-type suffix
-            # (Road, Street, …).  If the user omits the road type (e.g. just
-            # "43a Orangi Kaupapa") we must keep all words so we don't drop a
-            # genuine part of the road name.
             road_words = road.split()
             if len(road_words) > 1 and road_words[-1] in _ROAD_TYPE_SUFFIXES:
                 road_name = " ".join(road_words[:-1])
             else:
                 road_name = road
-            road_expr = f"LOWER(TRANSLATE(ROAD_NAME, {_SF_MACRON_FROM}, {_SF_MACRON_TO}))"
             road_lit = _sql_literal(f"%{road_name}%")
-            # LINZ stores the alpha suffix two ways in the current view:
-            #   1. Unit Value   → UNIT_VALUE='A', STREET_NUMBER='43'
-            #   2. Combined     → STREET_NUMBER='43A'
-            # (STREET_NUMBER_SUFFIX will be added once the view DDL is re-run)
+            # LINZ stores the alpha suffix two ways:
+            #   1. Unit Value   → UNIT_VALUE_NORM='a', STREET_NUMBER_NORM='43'
+            #   2. Combined     → STREET_NUMBER_NORM='43a'
             component_cond = (
-                f"({road_expr} LIKE {road_lit}"
-                f" AND (   (STREET_NUMBER = {_sql_literal(num)} AND LOWER(COALESCE(UNIT_VALUE,'')) = {_sql_literal(unit)})"
-                f"      OR LOWER(STREET_NUMBER) = {_sql_literal(num + unit)}"
+                f"(ROAD_NAME_NORM LIKE {road_lit}"
+                f" AND (   (STREET_NUMBER_NORM = {_sql_literal(num)} AND UNIT_VALUE_NORM = {_sql_literal(unit)})"
+                f"      OR STREET_NUMBER_NORM = {_sql_literal(num + unit)}"
                 f"     ))"
             )
             addr_cond = f"({addr_cond} OR {component_cond})"
 
-        where = f"WHERE ({addr_cond}) AND TITLE_NO IS NOT NULL"
-    else:
-        where = "WHERE TITLE_NO IS NOT NULL"
+        where = f"WHERE {addr_cond}"
+    # (title_no IS NOT NULL is guaranteed — DIM_ADDRESS_SEARCH only contains
+    # rows where title_no IS NOT NULL, so the filter is not repeated here.)
 
     return f"""
     SELECT
@@ -268,7 +266,7 @@ def _build_address_search_query(q: str, limit: int) -> str:
         SUBURB,
         CITY,
         POSTCODE
-    FROM L.GOLD.DIM_ADDRESS
+    FROM L.GOLD.DIM_ADDRESS_SEARCH
     {where}
     ORDER BY FULL_ADDRESS
     LIMIT {limit}
