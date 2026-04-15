@@ -175,6 +175,7 @@
       let encumbrances = [];
       let lineage = { prior: [], follow_on: [] };
       let lineageGraph = { nodes: [], edges: [] };
+      let ancestors = { ancestors: [], count: 0 };
       let instrumentSearchResults = [];
       let offset = 0;
       const limit = 100;
@@ -316,6 +317,36 @@
             <text x='${n.x+90}' y='${n.y+16}' text-anchor='middle' font-size='11' fill='#334'>${esc(n.label)}</text>
           </a>`;
         }).join('');
+
+        // Full ancestry chain — sorted oldest-first (highest depth first)
+        const chain = (ancestors.ancestors || []).slice().sort((a,b) => b.depth - a.depth);
+        const chainHtml = chain.length === 0 ? '' : `
+          <div style='margin-top:16px'>
+            <div style='font-weight:600;margin-bottom:8px'>Full ancestry chain <span class='muted'>(${chain.length} prior title${chain.length===1?'':'s'})</span></div>
+            <div style='overflow-x:auto;padding-bottom:6px'>
+              <div style='display:flex;align-items:center;gap:0;min-width:max-content'>
+                ${chain.map((a, i) => {
+                  const enc = encodeURIComponent(a.title_no);
+                  const date = a.issue_date ? a.issue_date.slice(0,10) : '';
+                  const isLast = i === chain.length - 1;
+                  return `<a href='#' onclick="window.pickTitle(decodeURIComponent('${enc}'));return false;"
+                      style='display:inline-flex;flex-direction:column;align-items:center;padding:5px 10px;
+                             background:#f5f8ff;border:1px solid #d3dff8;border-radius:6px;
+                             text-decoration:none;min-width:110px;text-align:center'>
+                      <span style='font-size:11px;font-weight:600;color:#2f6ae6'>${esc(a.title_no)}</span>
+                      ${date ? `<span style='font-size:10px;color:#888'>${esc(date)}</span>` : ''}
+                    </a>${isLast ? '' : `<span style='color:#9db1e5;padding:0 4px;font-size:16px'>→</span>`}`;
+                }).join('')}
+                <span style='color:#9db1e5;padding:0 4px;font-size:16px'>→</span>
+                <div style='display:inline-flex;flex-direction:column;align-items:center;padding:5px 10px;
+                            background:#2f6ae6;border-radius:6px;min-width:110px;text-align:center'>
+                  <span style='font-size:11px;font-weight:600;color:#fff'>${esc(detail?.title_no || selectedTitle)}</span>
+                  <span style='font-size:10px;color:#c8d8f8'>current</span>
+                </div>
+              </div>
+            </div>
+          </div>`;
+
         document.getElementById('panel').innerHTML = `
           <div class='row'><b>Title Lineage</b> <span class='muted'>(click nodes to navigate)</span></div>
           <svg viewBox='0 0 ${w} ${h}' width='100%' height='220' style='overflow:visible'>
@@ -326,6 +357,7 @@
             ${makeRects(followNodes)}
           </svg>
           <div class='muted' style='padding:4px 0'>Prior: ${(lineage.prior||[]).length} | Follow-on: ${(lineage.follow_on||[]).length}</div>
+          ${chainHtml}
         `;
       }
 
@@ -365,13 +397,14 @@
         // Pass title_no as a query param (?no=) so slashes never appear in the URL path.
         // encodeURIComponent is safe here — query params are never touched by Vercel routing.
         const q = `no=${encodeURIComponent(titleNo)}`;
-        const [d, addr, inst, enc, lin, ling] = await Promise.all([
+        const [d, addr, inst, enc, lin, ling, anc] = await Promise.all([
           fetch(`/api/title?${q}`).then(r=>r.json()),
           fetch(`/api/title/address?${q}`).then(r=>r.json()),
           fetch(`/api/title/instruments?${q}`).then(r=>r.json()),
           fetch(`/api/title/encumbrances?${q}`).then(r=>r.json()),
           fetch(`/api/title/lineage?${q}`).then(r=>r.json()),
           fetch(`/api/title/lineage/graph?${q}`).then(r=>r.json()),
+          fetch(`/api/title/lineage/ancestors?${q}`).then(r=>r.json()),
         ]).finally(() => setLoading(false));
 
         if (d.error) {
@@ -386,6 +419,7 @@
         encumbrances  = enc.items  || [];
         lineage       = lin;
         lineageGraph  = ling;
+        ancestors     = anc;
 
         document.getElementById('header').innerHTML = `<b>${esc(detail.title_no)}</b> ${badge(detail.title_status, detail.title_status_desc)} <span class='muted'>${esc(detail.title_type_desc || detail.title_type || '')} • ${esc(detail.land_district_name || '')}</span>`;
         renderKpis();

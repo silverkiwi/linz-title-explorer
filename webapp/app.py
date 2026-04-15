@@ -3,6 +3,7 @@ import csv
 import io
 import os
 import re
+import unicodedata
 from contextlib import contextmanager
 from urllib.parse import unquote
 
@@ -173,22 +174,81 @@ def _build_search_query(q: str, limit: int, offset: int, sort_by: str, sort_dir:
 # Address search against GOLD.DIM_ADDRESS
 # ---------------------------------------------------------------------------
 
+
+# Māori vowels with macrons and their ASCII equivalents, used for both the
+# Python-side query normalisation and the Snowflake TRANSLATE() expression.
+_MACRON_FROM = "āēīōūĀĒĪŌŪ"
+_MACRON_TO   = "aeiouAEIOU"
+# Snowflake TRANSLATE() literal arguments (SQL string constants)
+_SF_MACRON_FROM = _sql_literal(_MACRON_FROM)
+_SF_MACRON_TO   = _sql_literal(_MACRON_TO)
+
+
+def _strip_macrons(text: str) -> str:
+    """Replace Māori-macron vowels with their plain ASCII equivalents."""
+    return unicodedata.normalize("NFC", text).translate(
+        str.maketrans(_MACRON_FROM, _MACRON_TO)
+    )
+
+
+# Common NZ road-type suffixes that appear at the end of a user's address
+# query but are absent from the ROAD_NAME column in DIM_ADDRESS.
+_ROAD_TYPE_SUFFIXES = {
+    "road", "street", "avenue", "drive", "place", "crescent", "lane",
+    "way", "court", "close", "terrace", "boulevard", "highway", "parade",
+    "grove", "rise", "rd", "st", "ave", "dr", "pl", "cr", "ln",
+}
+
+
 def _build_address_search_query(q: str, limit: int) -> str:
     where = ""
     if q:
-        ql = q.lower()
-        # LINZ stores a space between a street number and its alpha suffix
-        # (e.g. "43 A ORANGI KAUPAPA ROAD"), so a user typing "43A" would
-        # never match. Generate an alternative pattern with that space inserted
-        # and OR the two conditions together.
-        ql_spaced = re.sub(r"(\d)([a-z])", r"\1 \2", ql)
+        # Normalise query: strip Māori macrons, lowercase.
+        ql = _strip_macrons(q).lower()
+        # DB-side expression that normalises FULL_ADDRESS the same way.
+        db_expr = f"LOWER(TRANSLATE(FULL_ADDRESS, {_SF_MACRON_FROM}, {_SF_MACRON_TO}))"
+
+        # Pattern 1: user's query verbatim (handles "43 A Orangi Kaupapa Road").
         qlit = _sql_literal(f"%{ql}%")
+        addr_cond = f"{db_expr} LIKE {qlit}"
+
+        # Pattern 2: spaced digit-letter boundary (handles "43A" → "43 A").
+        ql_spaced = re.sub(r"(\d)([a-z])", r"\1 \2", ql)
         if ql_spaced != ql:
-            qlit_spaced = _sql_literal(f"%{ql_spaced}%")
-            addr_cond = f"(LOWER(FULL_ADDRESS) LIKE {qlit} OR LOWER(FULL_ADDRESS) LIKE {qlit_spaced})"
-        else:
-            addr_cond = f"LOWER(FULL_ADDRESS) LIKE {qlit}"
-        where = f"WHERE {addr_cond} AND TITLE_NO IS NOT NULL"
+            addr_cond = f"({addr_cond} OR {db_expr} LIKE {_sql_literal(f'%{ql_spaced}%')})"
+
+        # Pattern 3: component-based fallback for addresses stored in LINZ with
+        # the unit letter *before* the number (e.g. "A/43 ORANGI KAUPAPA ROAD"
+        # or "FLAT A 43 ORANGI KAUPAPA ROAD") — these never match a FULL_ADDRESS
+        # LIKE on "43a …".  Parse "43A Road Name" into components and search the
+        # individual columns directly.
+        m = re.match(r"^(\d+)\s*([a-z])\s+(.+)$", ql)
+        if m:
+            num, unit, road = m.group(1), m.group(2), m.group(3)
+            # Only strip the trailing word when it is a known road-type suffix
+            # (Road, Street, …).  If the user omits the road type (e.g. just
+            # "43a Orangi Kaupapa") we must keep all words so we don't drop a
+            # genuine part of the road name.
+            road_words = road.split()
+            if len(road_words) > 1 and road_words[-1] in _ROAD_TYPE_SUFFIXES:
+                road_name = " ".join(road_words[:-1])
+            else:
+                road_name = road
+            road_expr = f"LOWER(TRANSLATE(ROAD_NAME, {_SF_MACRON_FROM}, {_SF_MACRON_TO}))"
+            road_lit = _sql_literal(f"%{road_name}%")
+            # LINZ stores the alpha suffix two ways in the current view:
+            #   1. Unit Value   → UNIT_VALUE='A', STREET_NUMBER='43'
+            #   2. Combined     → STREET_NUMBER='43A'
+            # (STREET_NUMBER_SUFFIX will be added once the view DDL is re-run)
+            component_cond = (
+                f"({road_expr} LIKE {road_lit}"
+                f" AND (   (STREET_NUMBER = {_sql_literal(num)} AND LOWER(COALESCE(UNIT_VALUE,'')) = {_sql_literal(unit)})"
+                f"      OR LOWER(STREET_NUMBER) = {_sql_literal(num + unit)}"
+                f"     ))"
+            )
+            addr_cond = f"({addr_cond} OR {component_cond})"
+
+        where = f"WHERE ({addr_cond}) AND TITLE_NO IS NOT NULL"
     else:
         where = "WHERE TITLE_NO IS NOT NULL"
 
@@ -448,6 +508,42 @@ def title_lineage_graph():
         if rid:
             edges.append({"source": title_no, "target": rid})
     return jsonify({"title_no": title_no, "nodes": nodes, "edges": edges})
+
+
+@app.get("/api/title/lineage/ancestors")
+def title_lineage_ancestors():
+    title_no, err = _require_title_no()
+    if err:
+        return err
+    rows = _query(f"""
+        WITH RECURSIVE ancestry(title_no, depth) AS (
+            -- Direct predecessors of the requested title
+            SELECT th.TTL_TITLE_NO_PRIOR, 1
+            FROM SILVER.TITLE_HIERARCHY th
+            WHERE th.TTL_TITLE_NO_FLW = {_sql_literal(title_no)}
+              AND th.STATUS = 'CURR'
+            UNION ALL
+            -- Walk upwards one generation at a time
+            SELECT th.TTL_TITLE_NO_PRIOR, a.depth + 1
+            FROM ancestry a
+            JOIN SILVER.TITLE_HIERARCHY th
+              ON th.TTL_TITLE_NO_FLW = a.title_no
+             AND th.STATUS = 'CURR'
+            WHERE a.depth < 100
+        )
+        SELECT
+            a.title_no,
+            MIN(a.depth)   AS depth,
+            t.STATUS       AS title_status,
+            t.ISSUE_DATE   AS issue_date,
+            t.TYPE         AS title_type,
+            t.IS_CURRENT
+        FROM ancestry a
+        JOIN SILVER.TITLE t ON t.TITLE_NO = a.title_no
+        GROUP BY a.title_no, t.STATUS, t.ISSUE_DATE, t.TYPE, t.IS_CURRENT
+        ORDER BY MIN(a.depth) ASC
+    """)
+    return jsonify({"title_no": title_no, "count": len(rows), "ancestors": rows})
 
 
 @app.get("/api/instruments/search")
