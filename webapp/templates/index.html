@@ -301,22 +301,29 @@
       function renderLineage(){
         const p = (lineage.prior || []).slice(0, 8);
         const f = (lineage.follow_on || []).slice(0, 8);
-        const w = 760, h = 220, cx = 380, cy = 100;
+        const nodeH = 36, curH = 38;
+        const w = 760, h = 260, cx = 380, cy = 111;
         const leftX = 120, rightX = 580;
-        const spacing = (nodes, base) => nodes.map((x,i) => ({ label: x.related_title, x: base, y: 20 + i * Math.max(30, 160 / Math.max(1, nodes.length)) }));
+        const truncAddr = s => s && s.length > 28 ? s.slice(0, 26) + '…' : (s || '');
+        const spacing = (nodes, base) => nodes.map((x,i) => ({ label: x.related_title, address: x.address || '', addressInherited: !!x.address_inherited, x: base, y: 20 + i * Math.max(nodeH + 8, 180 / Math.max(1, nodes.length)) }));
         const priorNodes  = spacing(p, leftX);
         const followNodes = spacing(f, rightX);
         const lines = [
-          ...priorNodes.map(n=>`<line x1='${n.x+100}' y1='${n.y+12}' x2='${cx-90}' y2='${cy+14}' stroke='#9db1e5' stroke-width='1.5'/>`),
-          ...followNodes.map(n=>`<line x1='${cx+90}' y1='${cy+14}' x2='${n.x}' y2='${n.y+12}' stroke='#9db1e5' stroke-width='1.5'/>`),
+          ...priorNodes.map(n=>`<line x1='${n.x+100}' y1='${n.y+nodeH/2}' x2='${cx-90}' y2='${cy+curH/2}' stroke='#9db1e5' stroke-width='1.5'/>`),
+          ...followNodes.map(n=>`<line x1='${cx+90}' y1='${cy+curH/2}' x2='${n.x}' y2='${n.y+nodeH/2}' stroke='#9db1e5' stroke-width='1.5'/>`),
         ].join('');
-        const makeRects = (nodes, anchor) => nodes.map(n => {
+        const makeRects = (nodes) => nodes.map(n => {
           const enc = encodeURIComponent(n.label);
+          const addr = truncAddr(n.address);
+          const addrColor = n.addressInherited ? '#aaa' : '#888';
+          const addrStyle = n.addressInherited ? 'font-style="italic"' : '';
           return `<a href='#' onclick="window.pickTitle(decodeURIComponent('${enc}'));return false;">
-            <rect x='${n.x}' y='${n.y}' rx='6' width='180' height='24' fill='#f5f8ff' stroke='#d3dff8'/>
-            <text x='${n.x+90}' y='${n.y+16}' text-anchor='middle' font-size='11' fill='#334'>${esc(n.label)}</text>
+            <rect x='${n.x}' y='${n.y}' rx='6' width='180' height='${nodeH}' fill='#f5f8ff' stroke='#d3dff8'/>
+            <text x='${n.x+90}' y='${n.y+14}' text-anchor='middle' font-size='11' fill='#334'>${esc(n.label)}</text>
+            ${addr ? `<text x='${n.x+90}' y='${n.y+27}' text-anchor='middle' font-size='9' fill='${addrColor}' ${addrStyle}>${esc(addr)}</text>` : ''}
           </a>`;
         }).join('');
+        const currentAddr = truncAddr((titleAddresses[0]?.full_address) || '');
 
         // Full ancestry chain — sorted oldest-first (highest depth first)
         const chain = (ancestors.ancestors || []).slice().sort((a,b) => b.depth - a.depth);
@@ -349,11 +356,12 @@
 
         document.getElementById('panel').innerHTML = `
           <div class='row'><b>Title Lineage</b> <span class='muted'>(click nodes to navigate)</span></div>
-          <svg viewBox='0 0 ${w} ${h}' width='100%' height='220' style='overflow:visible'>
+          <svg viewBox='0 0 ${w} ${h}' width='100%' height='${h}' style='overflow:visible'>
             ${lines}
             ${makeRects(priorNodes)}
-            <rect x='${cx-90}' y='${cy}' rx='8' width='180' height='28' fill='#2f6ae6'/>
-            <text x='${cx}' y='${cy+19}' text-anchor='middle' font-size='12' fill='white'>${esc(detail?.title_no || selectedTitle)}</text>
+            <rect x='${cx-90}' y='${cy}' rx='8' width='180' height='${curH}' fill='#2f6ae6'/>
+            <text x='${cx}' y='${cy+14}' text-anchor='middle' font-size='12' fill='white'>${esc(detail?.title_no || selectedTitle)}</text>
+            ${currentAddr ? `<text x='${cx}' y='${cy+28}' text-anchor='middle' font-size='9' fill='#c8d8f8'>${esc(currentAddr)}</text>` : ''}
             ${makeRects(followNodes)}
           </svg>
           <div class='muted' style='padding:4px 0'>Prior: ${(lineage.prior||[]).length} | Follow-on: ${(lineage.follow_on||[]).length}</div>

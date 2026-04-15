@@ -455,15 +455,27 @@ def title_lineage():
     if err:
         return err
     prior = _query(f"""
-        SELECT PRIOR_TITLE_NO AS related_title, STATUS, PRIOR_TITLE_STATUS, PRIOR_ISSUE_DATE
-        FROM L.GOLD.V_TITLE_LINEAGE
-        WHERE FOLLOWING_TITLE_NO = {_sql_literal(title_no)}
+        SELECT tl.PRIOR_TITLE_NO AS related_title, tl.STATUS, tl.PRIOR_TITLE_STATUS, tl.PRIOR_ISSUE_DATE,
+               COALESCE(MIN(a.FULL_ADDRESS), MIN(a_succ.FULL_ADDRESS)) AS address,
+               CASE WHEN MIN(a.FULL_ADDRESS) IS NULL AND MIN(a_succ.FULL_ADDRESS) IS NOT NULL
+                    THEN TRUE ELSE FALSE END AS address_inherited
+        FROM L.GOLD.V_TITLE_LINEAGE tl
+        LEFT JOIN L.GOLD.V_TITLE_ADDRESS a      ON a.TITLE_NO      = tl.PRIOR_TITLE_NO
+        LEFT JOIN L.GOLD.V_TITLE_ADDRESS a_succ ON a_succ.TITLE_NO = tl.FOLLOWING_TITLE_NO
+        WHERE tl.FOLLOWING_TITLE_NO = {_sql_literal(title_no)}
+        GROUP BY tl.PRIOR_TITLE_NO, tl.STATUS, tl.PRIOR_TITLE_STATUS, tl.PRIOR_ISSUE_DATE
         ORDER BY related_title LIMIT 1000
     """)
     follow_on = _query(f"""
-        SELECT FOLLOWING_TITLE_NO AS related_title, STATUS, FOLLOWING_TITLE_STATUS, FOLLOWING_ISSUE_DATE
-        FROM L.GOLD.V_TITLE_LINEAGE
-        WHERE PRIOR_TITLE_NO = {_sql_literal(title_no)}
+        SELECT tl.FOLLOWING_TITLE_NO AS related_title, tl.STATUS, tl.FOLLOWING_TITLE_STATUS, tl.FOLLOWING_ISSUE_DATE,
+               COALESCE(MIN(a.FULL_ADDRESS), MIN(a_prior.FULL_ADDRESS)) AS address,
+               CASE WHEN MIN(a.FULL_ADDRESS) IS NULL AND MIN(a_prior.FULL_ADDRESS) IS NOT NULL
+                    THEN TRUE ELSE FALSE END AS address_inherited
+        FROM L.GOLD.V_TITLE_LINEAGE tl
+        LEFT JOIN L.GOLD.V_TITLE_ADDRESS a       ON a.TITLE_NO       = tl.FOLLOWING_TITLE_NO
+        LEFT JOIN L.GOLD.V_TITLE_ADDRESS a_prior ON a_prior.TITLE_NO = tl.PRIOR_TITLE_NO
+        WHERE tl.PRIOR_TITLE_NO = {_sql_literal(title_no)}
+        GROUP BY tl.FOLLOWING_TITLE_NO, tl.STATUS, tl.FOLLOWING_TITLE_STATUS, tl.FOLLOWING_ISSUE_DATE
         ORDER BY related_title LIMIT 1000
     """)
     return jsonify({
