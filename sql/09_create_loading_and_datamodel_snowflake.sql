@@ -241,6 +241,22 @@ CREATE TABLE IF NOT EXISTS SILVER.ENCUMBRANCEE (
   CONSTRAINT PK_ENCUMBRANCEE PRIMARY KEY (ID)
 );
 
+-- Encumbrance Share  (interest held per encumbrancee in an encumbrance)
+CREATE TABLE IF NOT EXISTS SILVER.ENCUMBRANCE_SHARE (
+  ID                  NUMBER,
+  ENC_ID              NUMBER,        -- FK → ENCUMBRANCE.ID
+  STATUS              STRING,        -- Ref: TSDS code group
+  ACT_TIN_ID_CRT      NUMBER,
+  ACT_ID_CRT          NUMBER,
+  ACT_ID_EXT          NUMBER,
+  ACT_TIN_ID_EXT      NUMBER,
+  SYSTEM_CREATED      CHAR(1),       -- Y/N: created by system copy-down
+  SYSTEM_EXTINGUISHED CHAR(1),       -- Y/N: extinguished by system
+  IS_CURRENT          BOOLEAN,
+  LOAD_TS             TIMESTAMP_NTZ DEFAULT CURRENT_TIMESTAMP(),
+  CONSTRAINT PK_ENCUMBRANCE_SHARE PRIMARY KEY (ID)
+);
+
 -- 4.76 Title Encumbrance  (junction: encumbrance ↔ title)
 CREATE TABLE IF NOT EXISTS SILVER.TITLE_ENCUMBRANCE (
   ID              NUMBER,
@@ -309,6 +325,8 @@ CREATE TABLE IF NOT EXISTS SILVER.APPELLATION (
   SUB_TYPE_POSITION   STRING,        -- Ref: AGNP code group
   ACT_ID_CRT          NUMBER,
   AUDIT_ID            NUMBER,
+  HEIGHT_LIMITED      STRING,        -- Height limitation on the parcel
+  OTHER_APPELLATION   STRING,        -- Additional appellation text
   LOAD_TS             TIMESTAMP_NTZ DEFAULT CURRENT_TIMESTAMP(),
   CONSTRAINT PK_APPELLATION PRIMARY KEY (ID)
 );
@@ -316,11 +334,14 @@ CREATE TABLE IF NOT EXISTS SILVER.APPELLATION (
 -- 4.26 Legal Description
 CREATE TABLE IF NOT EXISTS SILVER.LEGAL_DESCRIPTION (
   ID                    NUMBER,
+  TTL_TITLE_NO          STRING,        -- FK → TITLE.TITLE_NO
   TYPE                  STRING,
+  STATUS                STRING,
+  TOTAL_AREA            NUMBER(20,4),  -- Total area of the legal description
+  LEGAL_DESC_TEXT       STRING,        -- Human-readable legal description text
   LOT_NUMBER            STRING,
   DEPOSITED_PLAN_NUMBER STRING,
   FLAT_PLAN_NUMBER      STRING,
-  STATUS                STRING,
   AUDIT_ID              NUMBER,
   LOAD_TS               TIMESTAMP_NTZ DEFAULT CURRENT_TIMESTAMP(),
   CONSTRAINT PK_LEGAL_DESCRIPTION PRIMARY KEY (ID)
@@ -328,17 +349,23 @@ CREATE TABLE IF NOT EXISTS SILVER.LEGAL_DESCRIPTION (
 
 -- 4.27 Legal Description Parcel
 CREATE TABLE IF NOT EXISTS SILVER.LEGAL_DESCRIPTION_PARCEL (
-  LEG_ID   NUMBER,
-  PAR_ID   NUMBER,
-  AUDIT_ID NUMBER,
-  LOAD_TS  TIMESTAMP_NTZ DEFAULT CURRENT_TIMESTAMP(),
+  LEG_ID        NUMBER,
+  PAR_ID        NUMBER,
+  SEQUENCE      NUMBER,               -- Order of parcel within the legal description
+  PART_AFFECTED STRING,               -- e.g. 'PART' if only part of parcel affected
+  SHARE         STRING,               -- Fractional share (rare)
+  SUR_WRK_ID    NUMBER,               -- FK → survey work
+  AUDIT_ID      NUMBER,
+  LOAD_TS       TIMESTAMP_NTZ DEFAULT CURRENT_TIMESTAMP(),
   CONSTRAINT PK_LEGAL_DESCRIPTION_PARCEL PRIMARY KEY (LEG_ID, PAR_ID)
 );
 
 -- 4.83 Title Parcel Association
 CREATE TABLE IF NOT EXISTS SILVER.TITLE_PARCEL_ASSOCIATION (
+  ID           NUMBER,                -- Surrogate key
   TTL_TITLE_NO STRING,
   PAR_ID       NUMBER,
+  SOURCE       STRING,                -- Origin of the association record
   STATUS       STRING,
   AUDIT_ID     NUMBER,
   LOAD_TS      TIMESTAMP_NTZ DEFAULT CURRENT_TIMESTAMP(),
@@ -552,6 +579,31 @@ LEFT JOIN ownership o ON t.TITLE_NO = o.TTL_TITLE_NO
 LEFT JOIN instr     i ON t.TITLE_NO = i.TTL_TITLE_NO
 LEFT JOIN enc       n ON t.TITLE_NO = n.TTL_TITLE_NO
 LEFT JOIN par       p ON t.TITLE_NO = p.TTL_TITLE_NO;
+
+-- ============================================================
+-- 5b) Schema migrations — add columns that may be absent on
+--     databases built from earlier versions of this script.
+--     ADD COLUMN IF NOT EXISTS is idempotent; safe to re-run.
+-- ============================================================
+
+ALTER TABLE IF EXISTS SILVER.APPELLATION
+  ADD COLUMN IF NOT EXISTS HEIGHT_LIMITED    STRING,
+  ADD COLUMN IF NOT EXISTS OTHER_APPELLATION STRING;
+
+ALTER TABLE IF EXISTS SILVER.LEGAL_DESCRIPTION
+  ADD COLUMN IF NOT EXISTS TTL_TITLE_NO    STRING,
+  ADD COLUMN IF NOT EXISTS TOTAL_AREA      NUMBER(20,4),
+  ADD COLUMN IF NOT EXISTS LEGAL_DESC_TEXT STRING;
+
+ALTER TABLE IF EXISTS SILVER.LEGAL_DESCRIPTION_PARCEL
+  ADD COLUMN IF NOT EXISTS SEQUENCE      NUMBER,
+  ADD COLUMN IF NOT EXISTS PART_AFFECTED STRING,
+  ADD COLUMN IF NOT EXISTS SHARE         STRING,
+  ADD COLUMN IF NOT EXISTS SUR_WRK_ID    NUMBER;
+
+ALTER TABLE IF EXISTS SILVER.TITLE_PARCEL_ASSOCIATION
+  ADD COLUMN IF NOT EXISTS ID     NUMBER,
+  ADD COLUMN IF NOT EXISTS SOURCE STRING;
 
 -- ============================================================
 -- 6) Performance clustering
