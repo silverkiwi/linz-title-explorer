@@ -176,9 +176,19 @@ def _build_search_query(q: str, limit: int, offset: int, sort_by: str, sort_dir:
 def _build_address_search_query(q: str, limit: int) -> str:
     where = ""
     if q:
-        qlit = _sql_literal(f"%{q.lower()}%")
-        where = f"""WHERE LOWER(FULL_ADDRESS) LIKE {qlit}
-                   AND TITLE_NO IS NOT NULL"""
+        ql = q.lower()
+        # LINZ stores a space between a street number and its alpha suffix
+        # (e.g. "43 A ORANGI KAUPAPA ROAD"), so a user typing "43A" would
+        # never match. Generate an alternative pattern with that space inserted
+        # and OR the two conditions together.
+        ql_spaced = re.sub(r"(\d)([a-z])", r"\1 \2", ql)
+        qlit = _sql_literal(f"%{ql}%")
+        if ql_spaced != ql:
+            qlit_spaced = _sql_literal(f"%{ql_spaced}%")
+            addr_cond = f"(LOWER(FULL_ADDRESS) LIKE {qlit} OR LOWER(FULL_ADDRESS) LIKE {qlit_spaced})"
+        else:
+            addr_cond = f"LOWER(FULL_ADDRESS) LIKE {qlit}"
+        where = f"WHERE {addr_cond} AND TITLE_NO IS NOT NULL"
     else:
         where = "WHERE TITLE_NO IS NOT NULL"
 
