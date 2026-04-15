@@ -66,6 +66,32 @@
       .addr-meta { font-size:12px; color:#687086; margin-top:2px; }
 
       @media (max-width: 980px){ .grid{grid-template-columns:1fr;} .kpis{grid-template-columns:repeat(2,1fr);} }
+
+      /* Loading overlay */
+      .details { position: relative; }
+      .loading-overlay {
+        display: none;
+        position: absolute; inset: 0;
+        background: rgba(255,255,255,0.65);
+        backdrop-filter: blur(3px);
+        -webkit-backdrop-filter: blur(3px);
+        border-radius: 12px;
+        z-index: 10;
+        align-items: center;
+        justify-content: center;
+        flex-direction: column;
+        gap: 10px;
+      }
+      .loading-overlay.active { display: flex; }
+      .spinner {
+        width: 36px; height: 36px;
+        border: 3px solid #d0daf5;
+        border-top-color: #2f6ae6;
+        border-radius: 50%;
+        animation: spin 0.7s linear infinite;
+      }
+      .loading-label { font-size: 13px; color: #2f6ae6; font-weight: 500; }
+      @keyframes spin { to { transform: rotate(360deg); } }
     </style>
   </head>
   <body>
@@ -116,6 +142,10 @@
 
         <!-- Right: detail panel -->
         <div class="card details">
+          <div class="loading-overlay" id="loadingOverlay">
+            <div class="spinner"></div>
+            <div class="loading-label" id="loadingLabel">Loading…</div>
+          </div>
           <div id="header"><b>Select a title</b></div>
           <div class="kpis" id="kpis"></div>
           <div class="tabs">
@@ -317,8 +347,15 @@
       }
 
       // ── Load a title ───────────────────────────────────────────────────
+      function setLoading(on, label='Loading…'){
+        const el = document.getElementById('loadingOverlay');
+        document.getElementById('loadingLabel').textContent = label;
+        el.classList.toggle('active', on);
+      }
+
       async function loadTitle(titleNo){
         selectedTitle = titleNo;
+        setLoading(true, `Loading ${titleNo}…`);
         document.getElementById('status').textContent = `Loading ${titleNo}…`;
 
         // Pass title_no as a query param (?no=) so slashes never appear in the URL path.
@@ -331,7 +368,7 @@
           fetch(`/api/title/encumbrances?${q}`).then(r=>r.json()),
           fetch(`/api/title/lineage?${q}`).then(r=>r.json()),
           fetch(`/api/title/lineage/graph?${q}`).then(r=>r.json()),
-        ]);
+        ]).finally(() => setLoading(false));
 
         if (d.error) {
           document.getElementById('status').textContent = `Not found: ${titleNo}`;
