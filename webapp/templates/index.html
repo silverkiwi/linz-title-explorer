@@ -321,16 +321,16 @@
         selectedTitle = titleNo;
         document.getElementById('status').textContent = `Loading ${titleNo}…`;
 
-        // Encode each path segment separately so slashes in title numbers (e.g. NA130A/196)
-        // are preserved as real path separators — Vercel routing breaks on %2F.
-        const encTitle = titleNo.split('/').map(encodeURIComponent).join('/');
+        // Pass title_no as a query param (?no=) so slashes never appear in the URL path.
+        // encodeURIComponent is safe here — query params are never touched by Vercel routing.
+        const q = `no=${encodeURIComponent(titleNo)}`;
         const [d, addr, inst, enc, lin, ling] = await Promise.all([
-          fetch(`/api/title/${encTitle}`).then(r=>r.json()),
-          fetch(`/api/title/${encTitle}/address`).then(r=>r.json()),
-          fetch(`/api/title/${encTitle}/instruments`).then(r=>r.json()),
-          fetch(`/api/title/${encTitle}/encumbrances`).then(r=>r.json()),
-          fetch(`/api/title/${encTitle}/lineage`).then(r=>r.json()),
-          fetch(`/api/title/${encTitle}/lineage/graph`).then(r=>r.json()),
+          fetch(`/api/title?${q}`).then(r=>r.json()),
+          fetch(`/api/title/address?${q}`).then(r=>r.json()),
+          fetch(`/api/title/instruments?${q}`).then(r=>r.json()),
+          fetch(`/api/title/encumbrances?${q}`).then(r=>r.json()),
+          fetch(`/api/title/lineage?${q}`).then(r=>r.json()),
+          fetch(`/api/title/lineage/graph?${q}`).then(r=>r.json()),
         ]);
 
         if (d.error) {
@@ -447,8 +447,8 @@
       // ── Global helpers for inline onclick handlers ─────────────────────
       window.searchInstruments = searchInstruments;
       window.pickTitle = async (titleNo) => { setMode('title'); await loadTitle(titleNo); };
-      window.exportTitleInstruments = () => { if (selectedTitle) { const e = selectedTitle.split('/').map(encodeURIComponent).join('/'); window.location.href = `/api/title/${e}/instruments.csv`; } };
-      window.exportTitleEncumbrances = () => { if (selectedTitle) { const e = selectedTitle.split('/').map(encodeURIComponent).join('/'); window.location.href = `/api/title/${e}/encumbrances.csv`; } };
+      window.exportTitleInstruments = () => { if (selectedTitle) window.location.href = `/api/title/instruments.csv?no=${encodeURIComponent(selectedTitle)}`; };
+      window.exportTitleEncumbrances = () => { if (selectedTitle) window.location.href = `/api/title/encumbrances.csv?no=${encodeURIComponent(selectedTitle)}`; };
       window.exportInstrumentSearchCsv = () => {
         const iq = (document.getElementById('instQ')?.value || '').trim();
         window.location.href = `/api/instruments/search.csv?q=${encodeURIComponent(iq)}&limit=5000`;

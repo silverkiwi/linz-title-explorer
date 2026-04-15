@@ -252,11 +252,20 @@ def address_search():
     return jsonify({"count": len(out), "items": out})
 
 
-@app.get("/api/title/<path:title_no>")
-def title_detail(title_no: str):
-    title_no = _parse_title_no(title_no)
-    if title_no is None:
-        return jsonify({"error": "Invalid title_no format"}), 400
+def _require_title_no():
+    """Read ?no= query param, validate, return (title_no, None) or (None, error_response)."""
+    raw = (request.args.get("no") or "").strip()
+    title_no = _parse_title_no(raw)
+    if not title_no:
+        return None, (jsonify({"error": "Invalid title_no format"}), 400)
+    return title_no, None
+
+
+@app.get("/api/title")
+def title_detail():
+    title_no, err = _require_title_no()
+    if err:
+        return err
     out = _query(f"""
         SELECT
             TITLE_NO,
@@ -281,11 +290,11 @@ def title_detail(title_no: str):
     return jsonify(out[0])
 
 
-@app.get("/api/title/<path:title_no>/instruments")
-def title_instruments(title_no: str):
-    title_no = _parse_title_no(title_no)
-    if title_no is None:
-        return jsonify({"error": "Invalid title_no format"}), 400
+@app.get("/api/title/instruments")
+def title_instruments():
+    title_no, err = _require_title_no()
+    if err:
+        return err
     items = _query(f"""
         SELECT
             TIN_ID, INST_NO, INSTRUMENT_CODE, TRT_GRP, TRT_TYPE,
@@ -299,11 +308,11 @@ def title_instruments(title_no: str):
     return jsonify({"title_no": title_no, "count": len(items), "items": items})
 
 
-@app.get("/api/title/<path:title_no>/instruments.csv")
-def title_instruments_csv(title_no: str):
-    title_no = _parse_title_no(title_no)
-    if title_no is None:
-        return jsonify({"error": "Invalid title_no format"}), 400
+@app.get("/api/title/instruments.csv")
+def title_instruments_csv():
+    title_no, err = _require_title_no()
+    if err:
+        return err
     items = _query(f"""
         SELECT
             TIN_ID, INST_NO, INSTRUMENT_CODE, TRT_GRP, TRT_TYPE,
@@ -317,11 +326,11 @@ def title_instruments_csv(title_no: str):
     return _to_csv_response(items, f"linz_title_{title_no}_instruments.csv")
 
 
-@app.get("/api/title/<path:title_no>/encumbrances")
-def title_encumbrances(title_no: str):
-    title_no = _parse_title_no(title_no)
-    if title_no is None:
-        return jsonify({"error": "Invalid title_no format"}), 400
+@app.get("/api/title/encumbrances")
+def title_encumbrances():
+    title_no, err = _require_title_no()
+    if err:
+        return err
     items = _query(f"""
         SELECT
             TITLE_ENCUMBRANCE_ID, ENC_ID,
@@ -336,11 +345,11 @@ def title_encumbrances(title_no: str):
     return jsonify({"title_no": title_no, "count": len(items), "items": items})
 
 
-@app.get("/api/title/<path:title_no>/encumbrances.csv")
-def title_encumbrances_csv(title_no: str):
-    title_no = _parse_title_no(title_no)
-    if title_no is None:
-        return jsonify({"error": "Invalid title_no format"}), 400
+@app.get("/api/title/encumbrances.csv")
+def title_encumbrances_csv():
+    title_no, err = _require_title_no()
+    if err:
+        return err
     items = _query(f"""
         SELECT
             TITLE_ENCUMBRANCE_ID, ENC_ID,
@@ -354,11 +363,11 @@ def title_encumbrances_csv(title_no: str):
     return _to_csv_response(items, f"linz_title_{title_no}_encumbrances.csv")
 
 
-@app.get("/api/title/<path:title_no>/address")
-def title_address(title_no: str):
-    title_no = _parse_title_no(title_no)
-    if title_no is None:
-        return jsonify({"error": "Invalid title_no format"}), 400
+@app.get("/api/title/address")
+def title_address():
+    title_no, err = _require_title_no()
+    if err:
+        return err
     items = _query(f"""
         SELECT
             ADDRESS_ID, PARCEL_ID, FULL_ADDRESS, STREET_ADDRESS,
@@ -372,11 +381,11 @@ def title_address(title_no: str):
     return jsonify({"title_no": title_no, "count": len(items), "items": items})
 
 
-@app.get("/api/title/<path:title_no>/lineage")
-def title_lineage(title_no: str):
-    title_no = _parse_title_no(title_no)
-    if title_no is None:
-        return jsonify({"error": "Invalid title_no format"}), 400
+@app.get("/api/title/lineage")
+def title_lineage():
+    title_no, err = _require_title_no()
+    if err:
+        return err
     prior = _query(f"""
         SELECT PRIOR_TITLE_NO AS related_title, STATUS, PRIOR_TITLE_STATUS, PRIOR_ISSUE_DATE
         FROM L.GOLD.V_TITLE_LINEAGE
@@ -398,11 +407,11 @@ def title_lineage(title_no: str):
     })
 
 
-@app.get("/api/title/<path:title_no>/lineage/graph")
-def title_lineage_graph(title_no: str):
-    title_no = _parse_title_no(title_no)
-    if title_no is None:
-        return jsonify({"error": "Invalid title_no format"}), 400
+@app.get("/api/title/lineage/graph")
+def title_lineage_graph():
+    title_no, err = _require_title_no()
+    if err:
+        return err
     prior = _query(f"""
         SELECT PRIOR_TITLE_NO AS related_title FROM L.GOLD.V_TITLE_LINEAGE
         WHERE FOLLOWING_TITLE_NO = {_sql_literal(title_no)} LIMIT 100
@@ -485,9 +494,9 @@ def instrument_search_csv():
     return _to_csv_response(items, "linz_instrument_search.csv")
 
 
-@app.get("/api/instrument/<path:inst_no>")
-def instrument_detail(inst_no: str):
-    inst_no = _parse_title_no(inst_no)
+@app.get("/api/instrument")
+def instrument_detail():
+    inst_no = _parse_title_no((request.args.get("no") or "").strip())
     if inst_no is None:
         return jsonify({"error": "Invalid instrument format"}), 400
     items = _query(f"""
