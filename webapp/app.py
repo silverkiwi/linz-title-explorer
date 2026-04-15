@@ -236,15 +236,13 @@ def _build_address_search_query(q: str, limit: int) -> str:
                 road_name = road
             road_expr = f"LOWER(TRANSLATE(ROAD_NAME, {_SF_MACRON_FROM}, {_SF_MACRON_TO}))"
             road_lit = _sql_literal(f"%{road_name}%")
-            # LINZ stores the alpha suffix three different ways depending on
-            # source data vintage; cover all three:
-            #   1. Address Number Suffix → STREET_NUMBER_SUFFIX='A', STREET_NUMBER='43'
-            #   2. Unit Value            → UNIT_VALUE='A',            STREET_NUMBER='43'
-            #   3. Combined              → STREET_NUMBER='43A'
+            # LINZ stores the alpha suffix two ways in the current view:
+            #   1. Unit Value   → UNIT_VALUE='A', STREET_NUMBER='43'
+            #   2. Combined     → STREET_NUMBER='43A'
+            # (STREET_NUMBER_SUFFIX will be added once the view DDL is re-run)
             component_cond = (
                 f"({road_expr} LIKE {road_lit}"
-                f" AND (   (STREET_NUMBER = {_sql_literal(num)} AND LOWER(COALESCE(STREET_NUMBER_SUFFIX,'')) = {_sql_literal(unit)})"
-                f"      OR (STREET_NUMBER = {_sql_literal(num)} AND LOWER(COALESCE(UNIT_VALUE,            '')) = {_sql_literal(unit)})"
+                f" AND (   (STREET_NUMBER = {_sql_literal(num)} AND LOWER(COALESCE(UNIT_VALUE,'')) = {_sql_literal(unit)})"
                 f"      OR LOWER(STREET_NUMBER) = {_sql_literal(num + unit)}"
                 f"     ))"
             )
@@ -265,7 +263,6 @@ def _build_address_search_query(q: str, limit: int) -> str:
         UNIT_VALUE,
         STREET_NUMBER,
         STREET_NUMBER_HIGH,
-        STREET_NUMBER_SUFFIX,
         ROAD_NAME,
         ROAD_TYPE,
         SUBURB,
