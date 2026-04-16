@@ -8,6 +8,9 @@
       window.va = window.va || function () { (window.vaq = window.vaq || []).push(arguments); };
     </script>
     <script defer src="/_vercel/insights/script.js"></script>
+    <!-- Leaflet for address map -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
     <style>
       *, *::before, *::after { box-sizing: border-box; }
       body { font-family: Inter, system-ui, sans-serif; margin: 0; background: #f5f7fb; color: #1f2430; }
@@ -57,7 +60,7 @@
       .tabs { display:flex; gap:6px; margin-bottom:10px; flex-wrap:wrap; }
       .tab { padding:7px 12px; border-radius:8px; border:1px solid #d7deef; background:#fff; cursor:pointer; font-size:13px; }
       .tab.active { background:#2f6ae6; color:#fff; border-color:#2f6ae6; }
-      .panel { border:1px solid #e6eaf4; border-radius:10px; padding:10px; max-height:48vh; overflow:auto; }
+      .panel { border:1px solid #e6eaf4; border-radius:10px; padding:10px; max-height:58vh; overflow:auto; }
       .row { padding:8px 0; border-bottom:1px solid #edf0f6; font-size:13px; }
       .row:last-child { border-bottom:0; }
       .addr-chip { display:inline-block; background:#f0f5ff; border:1px solid #c7d8ff; border-radius:8px; padding:6px 12px; margin:4px 2px; font-size:13px; }
@@ -96,6 +99,10 @@
       }
       .loading-label { font-size: 13px; color: #2f6ae6; font-weight: 500; }
       @keyframes spin { to { transform: rotate(360deg); } }
+
+      /* Address map */
+      #addressMap { height: 240px; border-radius: 8px; margin-bottom: 10px; border: 1px solid #e6eaf4; }
+      .map-credit { font-size: 11px; color: #687086; margin-bottom: 6px; }
     </style>
   </head>
   <body>
@@ -180,6 +187,8 @@
       let offset = 0;
       const limit = 100;
       let currentTab = 'summary';
+      let leafletMap = null;
+      let leafletMarker = null;
 
       // ── Utils ──────────────────────────────────────────────────────────
       function esc(v){ return (v ?? '').toString().replace(/[&<>"']/g, s=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[s])); }
@@ -239,12 +248,13 @@
         const addr = detail.primary_address ? `<div class='addr-chip'>📍 ${esc(detail.primary_address)}</div>` : '';
         const appel = detail.appellations ? `<div class='row'><b>Appellation:</b> ${esc(detail.appellations)}</div>` : '';
         const owner = detail.proprietors   ? `<div class='row'><b>Owner(s):</b> ${esc(detail.proprietors)}</div>` : '';
+        const maoriLand = detail.maori_land === 'Y' ? 'Yes' : 'No';
         document.getElementById('panel').innerHTML = `
           <div class='row'><b>Title No:</b> ${esc(detail.title_no)} ${badge(detail.title_status, detail.title_status_desc)}</div>
-          <div class='row'><b>Type:</b> ${esc(detail.title_type_desc || detail.title_type || '—')} | <b>Register:</b> ${esc(detail.register_type_desc || detail.register_type || '—')} | <b>Guarantee:</b> ${esc(detail.guarantee_status || '—')}</div>
-          <div class='row'><b>Issue Date:</b> ${esc(detail.issue_date || '—')} | <b>Māori Land:</b> ${esc(detail.maori_land || 'N')}</div>
+          <div class='row'><b>Type:</b> ${esc(detail.title_type_desc || detail.title_type || '—')} | <b>Register:</b> ${esc(detail.register_type_desc || detail.register_type || '—')} | <b>Guarantee:</b> ${esc(detail.guarantee_status_desc || detail.guarantee_status || '—')}</div>
+          <div class='row'><b>Issue Date:</b> ${esc(detail.issue_date || '—')} | <b>Māori Land:</b> ${esc(maoriLand)}</div>
           <div class='row'><b>Land District:</b> ${esc(detail.land_district_name || detail.ldt_loc_id || '—')}</div>
-          <div class='row'><b>Estate Types:</b> ${esc(detail.estate_types || '—')}</div>
+          <div class='row'><b>Estate Types:</b> ${esc(detail.estate_types_desc || detail.estate_types || '—')}</div>
           ${owner}
           ${appel}
           <div class='row'><b>Latest Instrument:</b> ${esc(detail.latest_inst_no || '—')} ${detail.latest_inst_type_desc ? `<span class='muted'>(${esc(detail.latest_inst_type_desc)})</span>` : ''} — ${esc(detail.latest_instrument_date ? detail.latest_instrument_date.slice(0,10) : '—')}</div>
@@ -261,12 +271,47 @@
           panel.innerHTML = '<div class="muted" style="padding:12px">No address records linked to this title.<br><small>Address data requires TITLE_PARCEL_ASSOCIATION to be loaded.</small></div>';
           return;
         }
-        panel.innerHTML = titleAddresses.map(a => `
+        const chips = titleAddresses.map(a => `
           <div class='row'>
             <div class='addr-chip'>📍 ${esc(a.full_address)}</div>
             <div class='muted'>Parcel: ${esc(a.parcel_id)} | Suburb: ${esc(a.suburb || '—')} | City: ${esc(a.city || '—')} | Postcode: ${esc(a.postcode || '—')}</div>
           </div>
         `).join('');
+        panel.innerHTML = `
+          <div id='addressMap'></div>
+          <div class='map-credit'>Map data © <a href='https://www.openstreetmap.org/copyright' target='_blank'>OpenStreetMap</a> contributors</div>
+          ${chips}
+        `;
+        // Initialise Leaflet map on first render; afterwards just invalidate size
+        if (!leafletMap) {
+          leafletMap = L.map('addressMap').setView([-41.3, 174.8], 6);
+          L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            attribution: '© OpenStreetMap contributors',
+            maxZoom: 19
+          }).addTo(leafletMap);
+        } else {
+          document.getElementById('addressMap').appendChild(leafletMap.getContainer());
+          leafletMap.invalidateSize();
+        }
+        // Geocode the first address via Nominatim (best-effort)
+        const addr = titleAddresses[0];
+        const query = encodeURIComponent((addr.full_address || '') + ', New Zealand');
+        fetch(`https://nominatim.openstreetmap.org/search?q=${query}&format=json&limit=1`, {
+          headers: { 'Accept-Language': 'en' }
+        })
+          .then(r => r.json())
+          .then(results => {
+            if (!results.length) return;
+            const lat = parseFloat(results[0].lat);
+            const lon = parseFloat(results[0].lon);
+            leafletMap.setView([lat, lon], 16);
+            if (leafletMarker) { leafletMarker.remove(); leafletMarker = null; }
+            leafletMarker = L.marker([lat, lon])
+              .addTo(leafletMap)
+              .bindPopup(esc(addr.full_address))
+              .openPopup();
+          })
+          .catch(() => {}); // geocoding is best-effort
       }
 
       // ── Instruments tab ────────────────────────────────────────────────
@@ -410,6 +455,9 @@
 
       async function loadTitle(titleNo){
         selectedTitle = titleNo;
+        // Reset map state so address tab re-geocodes for the new title
+        if (leafletMarker) { leafletMarker.remove(); leafletMarker = null; }
+        if (leafletMap) { leafletMap.setView([-41.3, 174.8], 6); }
         setLoading(true, `Loading ${titleNo}…`);
         document.getElementById('status').textContent = `Loading ${titleNo}…`;
 
