@@ -2,6 +2,7 @@ import base64
 import csv
 import io
 import os
+import queue
 import re
 import unicodedata
 from contextlib import contextmanager
@@ -14,6 +15,15 @@ from flask import Flask, Response, jsonify, render_template, request
 
 load_dotenv()
 app = Flask(__name__)
+
+
+@app.errorhandler(Exception)
+def handle_exception(e):
+    """Return JSON instead of HTML for unhandled exceptions so the frontend
+    can display a meaningful error rather than silently failing to parse."""
+    import traceback
+    app.logger.error("Unhandled exception: %s\n%s", e, traceback.format_exc())
+    return jsonify({"error": str(e), "type": type(e).__name__}), 500
 
 SF_ACCOUNT   = os.environ.get("SF_ACCOUNT", "")
 SF_USER      = os.environ.get("SF_USER", "")
@@ -53,19 +63,49 @@ SEARCH_SORT_COLUMNS = {
 }
 
 
-@contextmanager
-def get_conn():
-    conn = snowflake.connector.connect(
+# ---------------------------------------------------------------------------
+# Connection pool — avoids paying the 1-3 s Snowflake connection setup cost
+# on every request.  Idle connections are returned to the pool and reused.
+# ---------------------------------------------------------------------------
+_POOL_SIZE = 5
+_conn_pool: queue.Queue = queue.Queue(maxsize=_POOL_SIZE)
+
+
+def _make_conn():
+    return snowflake.connector.connect(
         account=SF_ACCOUNT,
         user=SF_USER,
         private_key=_load_private_key(),
         database=SF_DATABASE,
         warehouse=SF_WAREHOUSE,
     )
+
+
+@contextmanager
+def get_conn():
+    conn = None
+    try:
+        conn = _conn_pool.get_nowait()
+        if conn.is_closed():
+            conn = _make_conn()
+    except queue.Empty:
+        conn = _make_conn()
     try:
         yield conn
+    except Exception:
+        # Don't return a potentially broken connection to the pool.
+        try:
+            conn.close()
+        except Exception:
+            pass
+        conn = None
+        raise
     finally:
-        conn.close()
+        if conn is not None:
+            try:
+                _conn_pool.put_nowait(conn)
+            except queue.Full:
+                conn.close()
 
 
 def _rows_to_dicts(cursor):
@@ -441,7 +481,7 @@ def title_address():
             ADDRESS_ID, PARCEL_ID, FULL_ADDRESS, STREET_ADDRESS,
             UNIT_TYPE, UNIT_VALUE, STREET_NUMBER, ROAD_NAME, ROAD_TYPE,
             SUBURB, CITY, POSTCODE
-        FROM L.GOLD.V_TITLE_ADDRESS
+        FROM L.GOLD.DIM_ADDRESS_SEARCH
         WHERE TITLE_NO = {_sql_literal(title_no)}
         ORDER BY FULL_ADDRESS
         LIMIT 100
@@ -454,30 +494,36 @@ def title_lineage():
     title_no, err = _require_title_no()
     if err:
         return err
-    prior = _query(f"""
-        SELECT tl.PRIOR_TITLE_NO AS related_title, tl.STATUS, tl.PRIOR_TITLE_STATUS, tl.PRIOR_ISSUE_DATE,
-               COALESCE(MIN(a.FULL_ADDRESS), MIN(a_succ.FULL_ADDRESS)) AS address,
-               CASE WHEN MIN(a.FULL_ADDRESS) IS NULL AND MIN(a_succ.FULL_ADDRESS) IS NOT NULL
-                    THEN TRUE ELSE FALSE END AS address_inherited
-        FROM L.GOLD.V_TITLE_LINEAGE tl
-        LEFT JOIN L.GOLD.V_TITLE_ADDRESS a      ON a.TITLE_NO      = tl.PRIOR_TITLE_NO
-        LEFT JOIN L.GOLD.V_TITLE_ADDRESS a_succ ON a_succ.TITLE_NO = tl.FOLLOWING_TITLE_NO
-        WHERE tl.FOLLOWING_TITLE_NO = {_sql_literal(title_no)}
-        GROUP BY tl.PRIOR_TITLE_NO, tl.STATUS, tl.PRIOR_TITLE_STATUS, tl.PRIOR_ISSUE_DATE
-        ORDER BY related_title LIMIT 1000
-    """)
-    follow_on = _query(f"""
-        SELECT tl.FOLLOWING_TITLE_NO AS related_title, tl.STATUS, tl.FOLLOWING_TITLE_STATUS, tl.FOLLOWING_ISSUE_DATE,
-               COALESCE(MIN(a.FULL_ADDRESS), MIN(a_prior.FULL_ADDRESS)) AS address,
-               CASE WHEN MIN(a.FULL_ADDRESS) IS NULL AND MIN(a_prior.FULL_ADDRESS) IS NOT NULL
-                    THEN TRUE ELSE FALSE END AS address_inherited
-        FROM L.GOLD.V_TITLE_LINEAGE tl
-        LEFT JOIN L.GOLD.V_TITLE_ADDRESS a       ON a.TITLE_NO       = tl.FOLLOWING_TITLE_NO
-        LEFT JOIN L.GOLD.V_TITLE_ADDRESS a_prior ON a_prior.TITLE_NO = tl.PRIOR_TITLE_NO
-        WHERE tl.PRIOR_TITLE_NO = {_sql_literal(title_no)}
-        GROUP BY tl.FOLLOWING_TITLE_NO, tl.STATUS, tl.FOLLOWING_TITLE_STATUS, tl.FOLLOWING_ISSUE_DATE
-        ORDER BY related_title LIMIT 1000
-    """)
+    lit = _sql_literal(title_no)
+    with get_conn() as conn:
+        cur = conn.cursor()
+        cur.execute(f"""
+            SELECT tl.PRIOR_TITLE_NO AS related_title, tl.STATUS, tl.PRIOR_TITLE_STATUS, tl.PRIOR_ISSUE_DATE,
+                   COALESCE(MIN(a.FULL_ADDRESS), MIN(a_succ.FULL_ADDRESS)) AS address,
+                   CASE WHEN MIN(a.FULL_ADDRESS) IS NULL AND MIN(a_succ.FULL_ADDRESS) IS NOT NULL
+                        THEN TRUE ELSE FALSE END AS address_inherited
+            FROM L.GOLD.V_TITLE_LINEAGE tl
+            LEFT JOIN L.GOLD.DIM_ADDRESS_SEARCH a      ON a.TITLE_NO      = tl.PRIOR_TITLE_NO
+            LEFT JOIN L.GOLD.DIM_ADDRESS_SEARCH a_succ ON a_succ.TITLE_NO = tl.FOLLOWING_TITLE_NO
+            WHERE tl.FOLLOWING_TITLE_NO = {lit}
+            GROUP BY tl.PRIOR_TITLE_NO, tl.STATUS, tl.PRIOR_TITLE_STATUS, tl.PRIOR_ISSUE_DATE
+            ORDER BY related_title LIMIT 1000
+        """)
+        prior = _rows_to_dicts(cur)
+        cur.execute(f"""
+            SELECT tl.FOLLOWING_TITLE_NO AS related_title, tl.STATUS, tl.FOLLOWING_TITLE_STATUS, tl.FOLLOWING_ISSUE_DATE,
+                   COALESCE(MIN(a.FULL_ADDRESS), MIN(a_prior.FULL_ADDRESS)) AS address,
+                   CASE WHEN MIN(a.FULL_ADDRESS) IS NULL AND MIN(a_prior.FULL_ADDRESS) IS NOT NULL
+                        THEN TRUE ELSE FALSE END AS address_inherited
+            FROM L.GOLD.V_TITLE_LINEAGE tl
+            LEFT JOIN L.GOLD.DIM_ADDRESS_SEARCH a       ON a.TITLE_NO       = tl.FOLLOWING_TITLE_NO
+            LEFT JOIN L.GOLD.DIM_ADDRESS_SEARCH a_prior ON a_prior.TITLE_NO = tl.PRIOR_TITLE_NO
+            WHERE tl.PRIOR_TITLE_NO = {lit}
+            GROUP BY tl.FOLLOWING_TITLE_NO, tl.STATUS, tl.FOLLOWING_TITLE_STATUS, tl.FOLLOWING_ISSUE_DATE
+            ORDER BY related_title LIMIT 1000
+        """)
+        follow_on = _rows_to_dicts(cur)
+        cur.close()
     return jsonify({
         "title_no": title_no,
         "prior_count": len(prior),
@@ -492,14 +538,20 @@ def title_lineage_graph():
     title_no, err = _require_title_no()
     if err:
         return err
-    prior = _query(f"""
-        SELECT PRIOR_TITLE_NO AS related_title FROM L.GOLD.V_TITLE_LINEAGE
-        WHERE FOLLOWING_TITLE_NO = {_sql_literal(title_no)} LIMIT 100
-    """)
-    follow_on = _query(f"""
-        SELECT FOLLOWING_TITLE_NO AS related_title FROM L.GOLD.V_TITLE_LINEAGE
-        WHERE PRIOR_TITLE_NO = {_sql_literal(title_no)} LIMIT 100
-    """)
+    lit = _sql_literal(title_no)
+    with get_conn() as conn:
+        cur = conn.cursor()
+        cur.execute(f"""
+            SELECT PRIOR_TITLE_NO AS related_title FROM L.GOLD.V_TITLE_LINEAGE
+            WHERE FOLLOWING_TITLE_NO = {lit} LIMIT 100
+        """)
+        prior = _rows_to_dicts(cur)
+        cur.execute(f"""
+            SELECT FOLLOWING_TITLE_NO AS related_title FROM L.GOLD.V_TITLE_LINEAGE
+            WHERE PRIOR_TITLE_NO = {lit} LIMIT 100
+        """)
+        follow_on = _rows_to_dicts(cur)
+        cur.close()
     nodes = [{"id": title_no, "group": "current"}]
     edges = []
     seen = {title_no}

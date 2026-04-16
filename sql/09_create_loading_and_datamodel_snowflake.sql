@@ -241,6 +241,22 @@ CREATE TABLE IF NOT EXISTS SILVER.ENCUMBRANCEE (
   CONSTRAINT PK_ENCUMBRANCEE PRIMARY KEY (ID)
 );
 
+-- Encumbrance Share  (interest held per encumbrancee in an encumbrance)
+CREATE TABLE IF NOT EXISTS SILVER.ENCUMBRANCE_SHARE (
+  ID                  NUMBER,
+  ENC_ID              NUMBER,        -- FK → ENCUMBRANCE.ID
+  STATUS              STRING,        -- Ref: TSDS code group
+  ACT_TIN_ID_CRT      NUMBER,
+  ACT_ID_CRT          NUMBER,
+  ACT_ID_EXT          NUMBER,
+  ACT_TIN_ID_EXT      NUMBER,
+  SYSTEM_CREATED      CHAR(1),       -- Y/N: created by system copy-down
+  SYSTEM_EXTINGUISHED CHAR(1),       -- Y/N: extinguished by system
+  IS_CURRENT          BOOLEAN,
+  LOAD_TS             TIMESTAMP_NTZ DEFAULT CURRENT_TIMESTAMP(),
+  CONSTRAINT PK_ENCUMBRANCE_SHARE PRIMARY KEY (ID)
+);
+
 -- 4.76 Title Encumbrance  (junction: encumbrance ↔ title)
 CREATE TABLE IF NOT EXISTS SILVER.TITLE_ENCUMBRANCE (
   ID              NUMBER,
@@ -309,6 +325,8 @@ CREATE TABLE IF NOT EXISTS SILVER.APPELLATION (
   SUB_TYPE_POSITION   STRING,        -- Ref: AGNP code group
   ACT_ID_CRT          NUMBER,
   AUDIT_ID            NUMBER,
+  HEIGHT_LIMITED      STRING,        -- Height limitation on the parcel
+  OTHER_APPELLATION   STRING,        -- Additional appellation text
   LOAD_TS             TIMESTAMP_NTZ DEFAULT CURRENT_TIMESTAMP(),
   CONSTRAINT PK_APPELLATION PRIMARY KEY (ID)
 );
@@ -316,11 +334,14 @@ CREATE TABLE IF NOT EXISTS SILVER.APPELLATION (
 -- 4.26 Legal Description
 CREATE TABLE IF NOT EXISTS SILVER.LEGAL_DESCRIPTION (
   ID                    NUMBER,
+  TTL_TITLE_NO          STRING,        -- FK → TITLE.TITLE_NO
   TYPE                  STRING,
+  STATUS                STRING,
+  TOTAL_AREA            NUMBER(20,4),  -- Total area of the legal description
+  LEGAL_DESC_TEXT       STRING,        -- Human-readable legal description text
   LOT_NUMBER            STRING,
   DEPOSITED_PLAN_NUMBER STRING,
   FLAT_PLAN_NUMBER      STRING,
-  STATUS                STRING,
   AUDIT_ID              NUMBER,
   LOAD_TS               TIMESTAMP_NTZ DEFAULT CURRENT_TIMESTAMP(),
   CONSTRAINT PK_LEGAL_DESCRIPTION PRIMARY KEY (ID)
@@ -328,230 +349,61 @@ CREATE TABLE IF NOT EXISTS SILVER.LEGAL_DESCRIPTION (
 
 -- 4.27 Legal Description Parcel
 CREATE TABLE IF NOT EXISTS SILVER.LEGAL_DESCRIPTION_PARCEL (
-  LEG_ID   NUMBER,
-  PAR_ID   NUMBER,
-  AUDIT_ID NUMBER,
-  LOAD_TS  TIMESTAMP_NTZ DEFAULT CURRENT_TIMESTAMP(),
+  LEG_ID        NUMBER,
+  PAR_ID        NUMBER,
+  SEQUENCE      NUMBER,               -- Order of parcel within the legal description
+  PART_AFFECTED STRING,               -- e.g. 'PART' if only part of parcel affected
+  SHARE         STRING,               -- Fractional share (rare)
+  SUR_WRK_ID    NUMBER,               -- FK → survey work
+  AUDIT_ID      NUMBER,
+  LOAD_TS       TIMESTAMP_NTZ DEFAULT CURRENT_TIMESTAMP(),
   CONSTRAINT PK_LEGAL_DESCRIPTION_PARCEL PRIMARY KEY (LEG_ID, PAR_ID)
 );
 
 -- 4.83 Title Parcel Association
 CREATE TABLE IF NOT EXISTS SILVER.TITLE_PARCEL_ASSOCIATION (
+  ID           NUMBER,                -- Surrogate key (from LINZ source)
   TTL_TITLE_NO STRING,
   PAR_ID       NUMBER,
-  STATUS       STRING,
+  SOURCE       STRING,                -- Origin of the association record
   AUDIT_ID     NUMBER,
   LOAD_TS      TIMESTAMP_NTZ DEFAULT CURRENT_TIMESTAMP(),
   CONSTRAINT PK_TITLE_PARCEL_ASSOCIATION PRIMARY KEY (TTL_TITLE_NO, PAR_ID)
 );
 
 -- ============================================================
--- 5) GOLD — dimensional model + marts
+-- 5) GOLD — run 15_gold_layer.sql to create / update all GOLD
+--    views and reporting views.  Those definitions are the
+--    canonical source of truth and are kept in one place to
+--    avoid the duplication and drift that used to live here.
 -- ============================================================
 
-CREATE OR REPLACE VIEW GOLD.DIM_TITLE AS
-SELECT
-  t.TITLE_NO,
-  t.LDT_LOC_ID,
-  ld.NAME                                                              AS LAND_DISTRICT_NAME,
-  ld.ABBREV                                                            AS LAND_DISTRICT_ABBREV,
-  t.STATUS                                                             AS TITLE_STATUS,
-  t.TYPE                                                               AS TITLE_TYPE,
-  t.REGISTER_TYPE,
-  t.ISSUE_DATE,
-  t.GUARANTEE_STATUS,
-  t.PROVISIONAL,
-  t.MAORI_LAND,
-  t.STE_ID,
-  t.SUR_WRK_ID,
-  t.IS_CURRENT,
-  CASE WHEN t.STATUS IN ('LIVE', 'REGD') THEN TRUE ELSE FALSE END      AS IS_ACTIVE,
-  t.TTL_TITLE_NO_SRS,
-  t.TTL_TITLE_NO_HEAD_SRS,
-  t.LOAD_TS
-FROM SILVER.TITLE t
-LEFT JOIN SILVER.LAND_DISTRICT ld ON t.LDT_LOC_ID = ld.LDT_LOC_ID;
+-- ============================================================
+-- 5b) Schema migrations — add columns that may be absent on
+--     databases built from earlier versions of this script.
+--     ADD COLUMN IF NOT EXISTS is idempotent; safe to re-run.
+-- ============================================================
 
-CREATE OR REPLACE VIEW GOLD.DIM_PARCEL AS
-SELECT
-  p.ID                  AS PARCEL_ID,
-  p.LDT_LOC_ID,
-  p.STATUS              AS PARCEL_STATUS,
-  p.PARCEL_INTENT,
-  p.AREA,
-  p.TOTAL_AREA,
-  p.CALCULATED_AREA,
-  p.APPELLATION_DATE,
-  p.SHAPE,
-  a.APPELLATION_VALUE,
-  a.TYPE                AS APPELLATION_TYPE,
-  a.PARCEL_TYPE,
-  a.PARCEL_VALUE,
-  a.MAORI_NAME,
-  a.PART_INDICATOR,
-  p.LOAD_TS
-FROM SILVER.PARCEL p
-LEFT JOIN SILVER.APPELLATION a
-  ON p.ID = a.PAR_ID
-  AND a.TITLE_FLAG = 'Y';   -- restrict to title appellations only
+ALTER TABLE IF EXISTS SILVER.APPELLATION
+  ADD COLUMN IF NOT EXISTS HEIGHT_LIMITED    STRING,
+  ADD COLUMN IF NOT EXISTS OTHER_APPELLATION STRING;
 
-CREATE OR REPLACE VIEW GOLD.BRIDGE_TITLE_PARCEL AS
-SELECT
-  tpa.TTL_TITLE_NO AS TITLE_NO,
-  tpa.PAR_ID       AS PARCEL_ID,
-  tpa.STATUS,
-  tpa.AUDIT_ID,
-  tpa.LOAD_TS
-FROM SILVER.TITLE_PARCEL_ASSOCIATION tpa;
+ALTER TABLE IF EXISTS SILVER.LEGAL_DESCRIPTION
+  ADD COLUMN IF NOT EXISTS TTL_TITLE_NO    STRING,
+  ADD COLUMN IF NOT EXISTS TOTAL_AREA      NUMBER(20,4),
+  ADD COLUMN IF NOT EXISTS LEGAL_DESC_TEXT STRING;
 
--- Estate ownership chain: TITLE_ESTATE → ESTATE_SHARE → PROPRIETOR
-CREATE OR REPLACE VIEW GOLD.FACT_TITLE_ESTATE AS
-SELECT
-  te.ID                  AS TITLE_ESTATE_ID,
-  te.TTL_TITLE_NO        AS TITLE_NO,
-  te.TYPE                AS ESTATE_TYPE,
-  te.STATUS              AS ESTATE_STATUS,
-  te.SHARE               AS ESTATE_SHARE,
-  te.PURPOSE             AS ESTATE_PURPOSE,
-  te.TIMESHARE_WEEK_NO,
-  te.TERM,
-  te.ORIGINAL_FLAG,
-  te.IS_CURRENT,
-  es.ID                  AS ESTATE_SHARE_ID,
-  es.SHARE               AS SHARE_FRACTION,
-  es.EXECUTORSHIP,
-  p.ID                   AS PROPRIETOR_ID,
-  p.TYPE                 AS PROPRIETOR_TYPE,   -- INDV / CORP
-  p.PRIME_SURNAME,
-  p.PRIME_OTHER_NAMES,
-  p.NAME_SUFFIX,
-  p.STATUS               AS PROPRIETOR_STATUS,
-  te.LOAD_TS
-FROM SILVER.TITLE_ESTATE te
-LEFT JOIN SILVER.ESTATE_SHARE es ON te.ID = es.ETT_ID
-LEFT JOIN SILVER.PROPRIETOR p    ON es.ID = p.ETS_ID;
+ALTER TABLE IF EXISTS SILVER.LEGAL_DESCRIPTION_PARCEL
+  ADD COLUMN IF NOT EXISTS SEQUENCE      NUMBER,
+  ADD COLUMN IF NOT EXISTS PART_AFFECTED STRING,
+  ADD COLUMN IF NOT EXISTS SHARE         STRING,
+  ADD COLUMN IF NOT EXISTS SUR_WRK_ID    NUMBER;
 
-CREATE OR REPLACE VIEW GOLD.FACT_TITLE_INSTRUMENT AS
-SELECT
-  tit.TTL_TITLE_NO            AS TITLE_NO,
-  ti.ID                       AS TIN_ID,
-  ti.INST_NO,
-  ti.TRT_GRP,
-  ti.TRT_TYPE,
-  tt.DESCRIPTION              AS TRANSACTION_TYPE_DESCRIPTION,
-  ti.PRIORITY_NO,
-  ti.STATUS                   AS INSTRUMENT_STATUS,
-  ti.LODGED_DATETIME,
-  ti.TIN_ID_PARENT,
-  ti.IS_CURRENT,
-  ti.LOAD_TS
-FROM SILVER.TITLE_INSTRUMENT_TITLE tit
-JOIN  SILVER.TITLE_INSTRUMENT ti
-  ON  tit.TIN_ID = ti.ID
-LEFT JOIN SILVER.TRANSACTION_TYPE tt
-  ON  ti.TRT_GRP = tt.GRP AND ti.TRT_TYPE = tt.TYPE;
-
-CREATE OR REPLACE VIEW GOLD.FACT_TITLE_ENCUMBRANCE AS
-SELECT
-  te.TTL_TITLE_NO             AS TITLE_NO,
-  te.ID                       AS TITLE_ENCUMBRANCE_ID,
-  te.ENC_ID,
-  te.STATUS                   AS TITLE_ENCUMBRANCE_STATUS,
-  e.STATUS                    AS ENCUMBRANCE_STATUS,
-  e.TERM                      AS ENCUMBRANCE_TERM,
-  te.IS_CURRENT,
-  te.LOAD_TS
-FROM SILVER.TITLE_ENCUMBRANCE te
-LEFT JOIN SILVER.ENCUMBRANCE e ON te.ENC_ID = e.ID;
-
--- Encumbrancee detail: who benefits from each encumbrance
-CREATE OR REPLACE VIEW GOLD.FACT_ENCUMBRANCEE AS
-SELECT
-  te.TTL_TITLE_NO             AS TITLE_NO,
-  te.ENC_ID,
-  te.ID                       AS TITLE_ENCUMBRANCE_ID,
-  enc.NAME                    AS ENCUMBRANCEE_NAME,
-  enc.STATUS                  AS ENCUMBRANCEE_STATUS,
-  e.TERM                      AS ENCUMBRANCE_TERM,
-  te.IS_CURRENT
-FROM SILVER.TITLE_ENCUMBRANCE te
-LEFT JOIN SILVER.ENCUMBRANCE e    ON te.ENC_ID  = e.ID
-LEFT JOIN SILVER.ENCUMBRANCEE enc ON enc.ENS_ID = e.ID;
-
--- 360° title summary
-CREATE OR REPLACE VIEW GOLD.V_TITLE_360 AS
-WITH estate AS (
-  SELECT
-    TTL_TITLE_NO,
-    COUNT(*)           AS ESTATE_COUNT,
-    COUNT_IF(IS_CURRENT) AS CURRENT_ESTATE_COUNT,
-    LISTAGG(DISTINCT TYPE, ', ') WITHIN GROUP (ORDER BY TYPE) AS ESTATE_TYPES
-  FROM SILVER.TITLE_ESTATE
-  GROUP BY TTL_TITLE_NO
-),
-ownership AS (
-  -- Distinct current proprietors per title (via estate share chain)
-  SELECT
-    te.TTL_TITLE_NO,
-    COUNT(DISTINCT p.ID) AS PROPRIETOR_COUNT
-  FROM SILVER.TITLE_ESTATE te
-  JOIN SILVER.ESTATE_SHARE es ON te.ID = es.ETT_ID
-  JOIN SILVER.PROPRIETOR p    ON es.ID = p.ETS_ID
-  WHERE p.STATUS <> 'HIST'
-  GROUP BY te.TTL_TITLE_NO
-),
-instr AS (
-  SELECT
-    tit.TTL_TITLE_NO,
-    COUNT(DISTINCT ti.ID)            AS INSTRUMENT_COUNT,
-    MAX(ti.LODGED_DATETIME)          AS LATEST_LODGED_DATETIME,
-    MAX_BY(ti.INST_NO, ti.LODGED_DATETIME) AS LATEST_INST_NO
-  FROM SILVER.TITLE_INSTRUMENT_TITLE tit
-  JOIN SILVER.TITLE_INSTRUMENT ti ON tit.TIN_ID = ti.ID
-  GROUP BY tit.TTL_TITLE_NO
-),
-enc AS (
-  SELECT
-    TTL_TITLE_NO,
-    COUNT(*)             AS ENCUMBRANCE_COUNT,
-    COUNT_IF(IS_CURRENT) AS CURRENT_ENCUMBRANCE_COUNT
-  FROM SILVER.TITLE_ENCUMBRANCE
-  GROUP BY TTL_TITLE_NO
-),
-par AS (
-  SELECT
-    TTL_TITLE_NO,
-    COUNT(DISTINCT PAR_ID) AS PARCEL_COUNT
-  FROM SILVER.TITLE_PARCEL_ASSOCIATION
-  GROUP BY TTL_TITLE_NO
-)
-SELECT
-  t.TITLE_NO,
-  t.TITLE_STATUS,
-  t.TITLE_TYPE,
-  t.REGISTER_TYPE,
-  t.ISSUE_DATE,
-  t.IS_CURRENT,
-  t.IS_ACTIVE,
-  t.LAND_DISTRICT_NAME,
-  t.MAORI_LAND,
-  COALESCE(e.ESTATE_COUNT,               0) AS ESTATE_COUNT,
-  COALESCE(e.CURRENT_ESTATE_COUNT,       0) AS CURRENT_ESTATE_COUNT,
-  e.ESTATE_TYPES,
-  COALESCE(o.PROPRIETOR_COUNT,           0) AS PROPRIETOR_COUNT,
-  COALESCE(i.INSTRUMENT_COUNT,           0) AS INSTRUMENT_COUNT,
-  i.LATEST_LODGED_DATETIME,
-  i.LATEST_INST_NO,
-  COALESCE(n.ENCUMBRANCE_COUNT,          0) AS ENCUMBRANCE_COUNT,
-  COALESCE(n.CURRENT_ENCUMBRANCE_COUNT,  0) AS CURRENT_ENCUMBRANCE_COUNT,
-  COALESCE(p.PARCEL_COUNT,               0) AS PARCEL_COUNT,
-  CURRENT_TIMESTAMP()                        AS REFRESHED_AT
-FROM GOLD.DIM_TITLE t
-LEFT JOIN estate    e ON t.TITLE_NO = e.TTL_TITLE_NO
-LEFT JOIN ownership o ON t.TITLE_NO = o.TTL_TITLE_NO
-LEFT JOIN instr     i ON t.TITLE_NO = i.TTL_TITLE_NO
-LEFT JOIN enc       n ON t.TITLE_NO = n.TTL_TITLE_NO
-LEFT JOIN par       p ON t.TITLE_NO = p.TTL_TITLE_NO;
+ALTER TABLE IF EXISTS SILVER.TITLE_PARCEL_ASSOCIATION
+  ADD COLUMN IF NOT EXISTS ID      NUMBER,
+  ADD COLUMN IF NOT EXISTS SOURCE  STRING;
+  -- NOTE: STATUS is intentionally absent — LINZ source data for
+  -- TITLE_PARCEL_ASSOCIATION does not include a STATUS field.
 
 -- ============================================================
 -- 6) Performance clustering

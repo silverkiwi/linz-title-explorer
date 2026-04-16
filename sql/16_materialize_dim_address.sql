@@ -77,12 +77,16 @@ ALTER TABLE GOLD.DIM_ADDRESS_SEARCH
 --    new LINZ data loaded during the day.
 --    Resume the task after creation (tasks start SUSPENDED).
 -- ============================================================
+-- NOTE: The task uses INSERT OVERWRITE INTO (not CREATE OR REPLACE TABLE) so
+-- that the clustering key and Search Optimization index on DIM_ADDRESS_SEARCH
+-- are preserved across every nightly refresh.  CREATE OR REPLACE TABLE would
+-- silently drop and recreate the table object, losing those optimisations.
 CREATE OR REPLACE TASK OPS.REFRESH_DIM_ADDRESS_SEARCH
     WAREHOUSE = COMPUTE_WH
     SCHEDULE  = 'USING CRON 0 15 * * * UTC'
     COMMENT   = 'Nightly rebuild of GOLD.DIM_ADDRESS_SEARCH (03:00 NZST)'
 AS
-    CREATE OR REPLACE TABLE GOLD.DIM_ADDRESS_SEARCH AS
+    INSERT OVERWRITE INTO GOLD.DIM_ADDRESS_SEARCH
     SELECT
         a.address_id,
         a.parcel_id,

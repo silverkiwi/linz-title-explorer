@@ -1,0 +1,32 @@
+# snowsql.config.example — SnowSQL connection config for LINZ Title Explorer
+#
+# Copy to ~/.snowsql/config (or merge into an existing file).
+# Replace all <placeholder> values with your actual credentials.
+#
+# Docs: https://docs.snowflake.com/en/user-guide/snowsql-config
+#
+# Usage:
+#   snowsql -c linz                          # interactive session
+#   snowsql -c linz -f sql/18_validate_build.sql   # run a script
+
+[connections.linz]
+accountname    = <your-account>.snowflakecomputing.com
+username       = <your-snowflake-user>
+dbname         = L
+schemaname     = PUBLIC
+warehousename  = COMPUTE_WH
+rolename       = SYSADMIN
+
+# Private-key authentication (recommended — matches the webapp setup)
+# Generate a key pair: https://docs.snowflake.com/en/user-guide/key-pair-auth
+private_key_path = /path/to/snowflake_rsa.p8
+# private_key_passphrase = <passphrase>   # only if key is encrypted
+
+# Alternatively, use password auth for local dev:
+# password = <your-password>
+
+[options]
+# Print timing info after each query
+timing = True
+# Stop on first error when running scripts
+stop_on_error = True

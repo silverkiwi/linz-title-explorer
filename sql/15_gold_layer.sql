@@ -362,9 +362,11 @@ ownership AS (
 instr AS (
     SELECT
         tit.TTL_TITLE_NO,
-        COUNT(DISTINCT ti.ID)                  AS INSTRUMENT_COUNT,
-        MAX(ti.LODGED_DATETIME)                AS LATEST_INSTRUMENT_DATE,
-        MAX_BY(ti.INST_NO, ti.LODGED_DATETIME) AS LATEST_INST_NO
+        COUNT(DISTINCT ti.ID)                   AS INSTRUMENT_COUNT,
+        MAX(ti.LODGED_DATETIME)                 AS LATEST_INSTRUMENT_DATE,
+        MAX_BY(ti.INST_NO,  ti.LODGED_DATETIME) AS LATEST_INST_NO,
+        MAX_BY(ti.TRT_GRP,  ti.LODGED_DATETIME) AS LATEST_TRT_GRP,
+        MAX_BY(ti.TRT_TYPE, ti.LODGED_DATETIME) AS LATEST_TRT_TYPE
     FROM SILVER.TITLE_INSTRUMENT_TITLE tit
     JOIN SILVER.TITLE_INSTRUMENT ti ON tit.TIN_ID = ti.ID
     GROUP BY tit.TTL_TITLE_NO
@@ -410,12 +412,42 @@ lineage AS (
     FROM SILVER.TITLE_HIERARCHY
     WHERE STATUS = 'CURR'
     QUALIFY ROW_NUMBER() OVER (PARTITION BY TTL_TITLE_NO_FLW ORDER BY ID DESC) = 1
+),
+latest_tt AS (
+    -- Human-readable type + description for the most recently lodged instrument
+    SELECT
+        i.TTL_TITLE_NO,
+        CONCAT_WS('-', i.LATEST_TRT_GRP, i.LATEST_TRT_TYPE)  AS LATEST_INST_TYPE,
+        tt.DESCRIPTION                                         AS LATEST_INST_TYPE_DESC
+    FROM instr i
+    LEFT JOIN SILVER.TRANSACTION_TYPE tt
+        ON  i.LATEST_TRT_GRP  = tt.GRP
+        AND i.LATEST_TRT_TYPE = tt.TYPE
 )
 SELECT
     t.TITLE_NO,
     t.TITLE_STATUS,
+    CASE t.TITLE_STATUS
+        WHEN 'LIVE' THEN 'Live'
+        WHEN 'HIST' THEN 'Historical'
+        WHEN 'CANC' THEN 'Cancelled'
+        ELSE t.TITLE_STATUS
+    END                                             AS TITLE_STATUS_DESC,
     t.TITLE_TYPE,
+    CASE t.TITLE_TYPE
+        WHEN 'F'   THEN 'Fee Simple'
+        WHEN 'LH'  THEN 'Leasehold'
+        WHEN 'SRS' THEN 'Unit Title (SRS)'
+        WHEN 'ML'  THEN 'Maori Land'
+        WHEN 'MOT' THEN 'Miscellaneous Owners'
+        ELSE t.TITLE_TYPE
+    END                                             AS TITLE_TYPE_DESC,
     t.REGISTER_TYPE,
+    CASE t.REGISTER_TYPE
+        WHEN 'CF'  THEN 'Computer Freehold Register'
+        WHEN 'CI'  THEN 'Computer Interest Register'
+        ELSE t.REGISTER_TYPE
+    END                                             AS REGISTER_TYPE_DESC,
     t.ISSUE_DATE,
     t.IS_CURRENT,
     t.IS_ACTIVE,
@@ -434,6 +466,8 @@ SELECT
     COALESCE(i.INSTRUMENT_COUNT,           0)  AS INSTRUMENT_COUNT,
     i.LATEST_INSTRUMENT_DATE,
     i.LATEST_INST_NO,
+    lt.LATEST_INST_TYPE,
+    lt.LATEST_INST_TYPE_DESC,
     -- Encumbrances
     COALESCE(n.ENCUMBRANCE_COUNT,          0)  AS ENCUMBRANCE_COUNT,
     COALESCE(n.CURRENT_ENCUMBRANCE_COUNT,  0)  AS CURRENT_ENCUMBRANCE_COUNT,
@@ -447,14 +481,15 @@ SELECT
     ln.PRIOR_TITLE_NO,
     CURRENT_TIMESTAMP()                        AS REFRESHED_AT
 FROM GOLD.DIM_TITLE t
-LEFT JOIN estate   e  ON t.TITLE_NO = e.TTL_TITLE_NO
-LEFT JOIN ownership o ON t.TITLE_NO = o.TTL_TITLE_NO
-LEFT JOIN instr    i  ON t.TITLE_NO = i.TTL_TITLE_NO
-LEFT JOIN enc      n  ON t.TITLE_NO = n.TTL_TITLE_NO
-LEFT JOIN par      p  ON t.TITLE_NO = p.TTL_TITLE_NO
-LEFT JOIN addr     ad ON t.TITLE_NO = ad.title_no
-LEFT JOIN appel    ap ON t.TITLE_NO = ap.TITLE_NO
-LEFT JOIN lineage  ln ON t.TITLE_NO = ln.TITLE_NO;
+LEFT JOIN estate    e  ON t.TITLE_NO = e.TTL_TITLE_NO
+LEFT JOIN ownership o  ON t.TITLE_NO = o.TTL_TITLE_NO
+LEFT JOIN instr     i  ON t.TITLE_NO = i.TTL_TITLE_NO
+LEFT JOIN latest_tt lt ON t.TITLE_NO = lt.TTL_TITLE_NO
+LEFT JOIN enc       n  ON t.TITLE_NO = n.TTL_TITLE_NO
+LEFT JOIN par       p  ON t.TITLE_NO = p.TTL_TITLE_NO
+LEFT JOIN addr      ad ON t.TITLE_NO = ad.title_no
+LEFT JOIN appel     ap ON t.TITLE_NO = ap.TITLE_NO
+LEFT JOIN lineage   ln ON t.TITLE_NO = ln.TITLE_NO;
 
 -- ============================================================
 -- SECTION 7: Reporting Views

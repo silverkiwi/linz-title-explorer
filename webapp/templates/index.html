@@ -397,6 +397,17 @@
         el.classList.toggle('active', on);
       }
 
+      // Fetch JSON from url; on HTTP error throw with the endpoint name + message.
+      async function jFetch(url) {
+        const r = await fetch(url);
+        const data = await r.json().catch(() => ({ error: `HTTP ${r.status} (non-JSON response)` }));
+        if (!r.ok || data.error) {
+          const msg = data.error || `HTTP ${r.status}`;
+          throw new Error(`${url.replace(/\?.*/, '')} — ${msg}`);
+        }
+        return data;
+      }
+
       async function loadTitle(titleNo){
         selectedTitle = titleNo;
         setLoading(true, `Loading ${titleNo}…`);
@@ -405,20 +416,24 @@
         // Pass title_no as a query param (?no=) so slashes never appear in the URL path.
         // encodeURIComponent is safe here — query params are never touched by Vercel routing.
         const q = `no=${encodeURIComponent(titleNo)}`;
-        const [d, addr, inst, enc, lin, ling, anc] = await Promise.all([
-          fetch(`/api/title?${q}`).then(r=>r.json()),
-          fetch(`/api/title/address?${q}`).then(r=>r.json()),
-          fetch(`/api/title/instruments?${q}`).then(r=>r.json()),
-          fetch(`/api/title/encumbrances?${q}`).then(r=>r.json()),
-          fetch(`/api/title/lineage?${q}`).then(r=>r.json()),
-          fetch(`/api/title/lineage/graph?${q}`).then(r=>r.json()),
-          fetch(`/api/title/lineage/ancestors?${q}`).then(r=>r.json()),
-        ]).finally(() => setLoading(false));
-
-        if (d.error) {
-          document.getElementById('status').textContent = `Not found: ${titleNo}`;
-          document.getElementById('panel').innerHTML = `<div class='muted' style='padding:12px'>Error: ${esc(d.error)}</div>`;
+        let d, addr, inst, enc, lin, ling, anc;
+        try {
+          [d, addr, inst, enc, lin, ling, anc] = await Promise.all([
+            jFetch(`/api/title?${q}`),
+            jFetch(`/api/title/address?${q}`),
+            jFetch(`/api/title/instruments?${q}`),
+            jFetch(`/api/title/encumbrances?${q}`),
+            jFetch(`/api/title/lineage?${q}`),
+            jFetch(`/api/title/lineage/graph?${q}`),
+            jFetch(`/api/title/lineage/ancestors?${q}`),
+          ]);
+        } catch (err) {
+          setLoading(false);
+          document.getElementById('status').textContent = `Error loading ${titleNo}`;
+          document.getElementById('panel').innerHTML = `<div class='muted' style='padding:12px;color:#b91c1c'>Error: ${esc(String(err))}</div>`;
           return;
+        } finally {
+          setLoading(false);
         }
 
         detail = d;
