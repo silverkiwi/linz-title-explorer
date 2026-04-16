@@ -15,6 +15,15 @@ from flask import Flask, Response, jsonify, render_template, request
 load_dotenv()
 app = Flask(__name__)
 
+
+@app.errorhandler(Exception)
+def handle_exception(e):
+    """Return JSON instead of HTML for unhandled exceptions so the frontend
+    can display a meaningful error rather than silently failing to parse."""
+    import traceback
+    app.logger.error("Unhandled exception: %s\n%s", e, traceback.format_exc())
+    return jsonify({"error": str(e), "type": type(e).__name__}), 500
+
 SF_ACCOUNT   = os.environ.get("SF_ACCOUNT", "")
 SF_USER      = os.environ.get("SF_USER", "")
 SF_DATABASE  = os.environ.get("SF_DATABASE", "L")
