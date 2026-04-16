@@ -167,12 +167,16 @@ def _to_csv_response(rows: list, filename: str) -> Response:
 def _build_search_query(q: str, limit: int, offset: int, sort_by: str, sort_dir: str) -> str:
     where = ""
     if q:
-        qlit = _sql_literal(f"%{q.lower()}%")
-        where = f"""WHERE LOWER(TITLE_NO) LIKE {qlit}
-                  OR LOWER(COALESCE(PRIMARY_ADDRESS, ''))  LIKE {qlit}
-                  OR LOWER(COALESCE(APPELLATIONS, ''))     LIKE {qlit}
-                  OR LOWER(COALESCE(PROPRIETORS, ''))      LIKE {qlit}
-                  OR LOWER(COALESCE(ESTATE_TYPES, ''))     LIKE {qlit}"""
+        # Normalise the same way the stored _NORM columns were built:
+        # strip Māori macrons then lowercase.  This lets Search Optimization
+        # fire on DIM_TITLE_SEARCH without any per-row LOWER/TRANSLATE.
+        ql = _strip_macrons(q).lower()
+        qlit = _sql_literal(f"%{ql}%")
+        where = f"""WHERE TITLE_NO_NORM          LIKE {qlit}
+                  OR PRIMARY_ADDRESS_NORM        LIKE {qlit}
+                  OR APPELLATIONS_NORM           LIKE {qlit}
+                  OR PROPRIETORS_NORM            LIKE {qlit}
+                  OR ESTATE_TYPES_NORM           LIKE {qlit}"""
 
     safe_col = SEARCH_SORT_COLUMNS.get(sort_by, "ISSUE_DATE")
     safe_dir = "ASC" if sort_dir.upper() == "ASC" else "DESC"
@@ -202,7 +206,7 @@ def _build_search_query(q: str, limit: int, offset: int, sort_by: str, sort_dir:
         APPELLATIONS,
         PRIOR_TITLE_NO,
         REFRESHED_AT            AS updated_at
-    FROM L.GOLD.V_TITLE_360
+    FROM L.GOLD.DIM_TITLE_SEARCH
     {where}
     ORDER BY IS_CURRENT DESC NULLS LAST, {safe_col} {safe_dir} NULLS LAST, TITLE_NO ASC
     LIMIT {limit}
@@ -389,7 +393,7 @@ def title_detail():
             ENCUMBRANCE_COUNT, CURRENT_ENCUMBRANCE_COUNT,
             PARCEL_COUNT, PRIMARY_ADDRESS, APPELLATIONS,
             PRIOR_TITLE_NO, REFRESHED_AT
-        FROM L.GOLD.V_TITLE_360
+        FROM L.GOLD.DIM_TITLE_SEARCH
         WHERE TITLE_NO = {_sql_literal(title_no)}
         LIMIT 1
     """)
