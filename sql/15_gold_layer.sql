@@ -334,12 +334,15 @@ WHERE title_no IS NOT NULL;
 CREATE OR REPLACE VIEW GOLD.V_TITLE_360 AS
 WITH estate AS (
     SELECT
-        TTL_TITLE_NO,
+        te.TTL_TITLE_NO,
         COUNT(*)                AS ESTATE_COUNT,
-        COUNT_IF(IS_CURRENT)    AS CURRENT_ESTATE_COUNT,
-        LISTAGG(DISTINCT TYPE, ', ') WITHIN GROUP (ORDER BY TYPE) AS ESTATE_TYPES
-    FROM SILVER.TITLE_ESTATE
-    GROUP BY TTL_TITLE_NO
+        COUNT_IF(te.IS_CURRENT) AS CURRENT_ESTATE_COUNT,
+        LISTAGG(DISTINCT te.TYPE, ', ') WITHIN GROUP (ORDER BY te.TYPE) AS ESTATE_TYPES,
+        LISTAGG(DISTINCT COALESCE(sc.DESCRIPTION, te.TYPE), ', ')
+            WITHIN GROUP (ORDER BY COALESCE(sc.DESCRIPTION, te.TYPE)) AS ESTATE_TYPES_DESC
+    FROM SILVER.TITLE_ESTATE te
+    LEFT JOIN SILVER.SYSTEM_CODE sc ON sc.CODE_GROUP = 'ETTT' AND sc.CODE = te.TYPE
+    GROUP BY te.TTL_TITLE_NO
 ),
 ownership AS (
     -- Populated once ESTATE_SHARE + PROPRIETOR are loaded
@@ -427,27 +430,11 @@ latest_tt AS (
 SELECT
     t.TITLE_NO,
     t.TITLE_STATUS,
-    CASE t.TITLE_STATUS
-        WHEN 'LIVE' THEN 'Live'
-        WHEN 'HIST' THEN 'Historical'
-        WHEN 'CANC' THEN 'Cancelled'
-        ELSE t.TITLE_STATUS
-    END                                             AS TITLE_STATUS_DESC,
+    COALESCE(sc_ts.DESCRIPTION, t.TITLE_STATUS)     AS TITLE_STATUS_DESC,
     t.TITLE_TYPE,
-    CASE t.TITLE_TYPE
-        WHEN 'F'   THEN 'Fee Simple'
-        WHEN 'LH'  THEN 'Leasehold'
-        WHEN 'SRS' THEN 'Unit Title (SRS)'
-        WHEN 'ML'  THEN 'Maori Land'
-        WHEN 'MOT' THEN 'Miscellaneous Owners'
-        ELSE t.TITLE_TYPE
-    END                                             AS TITLE_TYPE_DESC,
+    COALESCE(sc_tt.DESCRIPTION, t.TITLE_TYPE)       AS TITLE_TYPE_DESC,
     t.REGISTER_TYPE,
-    CASE t.REGISTER_TYPE
-        WHEN 'CF'  THEN 'Computer Freehold Register'
-        WHEN 'CI'  THEN 'Computer Interest Register'
-        ELSE t.REGISTER_TYPE
-    END                                             AS REGISTER_TYPE_DESC,
+    COALESCE(sc_rt.DESCRIPTION, t.REGISTER_TYPE)    AS REGISTER_TYPE_DESC,
     t.ISSUE_DATE,
     t.IS_CURRENT,
     t.IS_ACTIVE,
@@ -455,6 +442,7 @@ SELECT
     t.LDT_LOC_ID,
     t.MAORI_LAND,
     t.GUARANTEE_STATUS,
+    COALESCE(sc_gs.DESCRIPTION, t.GUARANTEE_STATUS) AS GUARANTEE_STATUS_DESC,
     -- Ownership (NULLs until ESTATE_SHARE + PROPRIETOR load)
     COALESCE(o.PROPRIETOR_COUNT,           0)  AS PROPRIETOR_COUNT,
     o.PROPRIETORS,
@@ -462,6 +450,7 @@ SELECT
     COALESCE(e.ESTATE_COUNT,               0)  AS ESTATE_COUNT,
     COALESCE(e.CURRENT_ESTATE_COUNT,       0)  AS CURRENT_ESTATE_COUNT,
     e.ESTATE_TYPES,
+    e.ESTATE_TYPES_DESC,
     -- Instruments
     COALESCE(i.INSTRUMENT_COUNT,           0)  AS INSTRUMENT_COUNT,
     i.LATEST_INSTRUMENT_DATE,
@@ -489,7 +478,12 @@ LEFT JOIN enc       n  ON t.TITLE_NO = n.TTL_TITLE_NO
 LEFT JOIN par       p  ON t.TITLE_NO = p.TTL_TITLE_NO
 LEFT JOIN addr      ad ON t.TITLE_NO = ad.title_no
 LEFT JOIN appel     ap ON t.TITLE_NO = ap.TITLE_NO
-LEFT JOIN lineage   ln ON t.TITLE_NO = ln.TITLE_NO;
+LEFT JOIN lineage   ln ON t.TITLE_NO = ln.TITLE_NO
+-- SYSTEM_CODE lookups — replace raw acronyms with descriptions
+LEFT JOIN SILVER.SYSTEM_CODE sc_ts ON sc_ts.CODE_GROUP = 'TTLS' AND sc_ts.CODE = t.TITLE_STATUS
+LEFT JOIN SILVER.SYSTEM_CODE sc_tt ON sc_tt.CODE_GROUP = 'TTLT' AND sc_tt.CODE = t.TITLE_TYPE
+LEFT JOIN SILVER.SYSTEM_CODE sc_rt ON sc_rt.CODE_GROUP = 'TTLR' AND sc_rt.CODE = t.REGISTER_TYPE
+LEFT JOIN SILVER.SYSTEM_CODE sc_gs ON sc_gs.CODE_GROUP = 'TTLG' AND sc_gs.CODE = t.GUARANTEE_STATUS;
 
 -- ============================================================
 -- SECTION 7: Reporting Views
