@@ -111,8 +111,8 @@
 
       <!-- Search mode toggle -->
       <div class="search-modes">
-        <button class="mode-btn" id="modeTitleBtn" onclick="setMode('title')">Title / Instrument Search</button>
-        <button class="mode-btn active" id="modeAddrBtn" onclick="setMode('address')">🏠 Address Search</button>
+        <button class="mode-btn" id="modeTitleBtn">Title / Instrument Search</button>
+        <button class="mode-btn active" id="modeAddrBtn">🏠 Address Search</button>
       </div>
 
       <!-- Title search toolbar -->
@@ -189,6 +189,69 @@
       let currentTab = 'summary';
       let leafletMap = null;
       let leafletMarker = null;
+      // Suppress URL writes while rehydrating from location (popstate / initial load)
+      let isHydrating = false;
+
+      // ── URL state sync ─────────────────────────────────────────────────
+      function syncUrl(push = true){
+        if (isHydrating) return;
+        const p = new URLSearchParams();
+        p.set('mode', mode);
+        const qEl = mode === 'title' ? document.getElementById('q') : document.getElementById('addrQ');
+        const q = (qEl?.value || '').trim();
+        if (q) p.set('q', q);
+        if (selectedTitle) {
+          p.set('title', selectedTitle);
+          p.set('tab', currentTab);
+        }
+        if (mode === 'title') {
+          const sortBy  = document.getElementById('sortBy').value;
+          const sortDir = document.getElementById('sortDir').value;
+          if (sortBy  && sortBy  !== 'issue_date') p.set('sort_by',  sortBy);
+          if (sortDir && sortDir !== 'DESC')        p.set('sort_dir', sortDir);
+          if (offset) p.set('offset', String(offset));
+        }
+        const newUrl = `${location.pathname}?${p.toString()}`;
+        if (push) history.pushState(null, '', newUrl);
+        else      history.replaceState(null, '', newUrl);
+      }
+
+      async function hydrateFromUrl(){
+        isHydrating = true;
+        try {
+          const p = new URLSearchParams(location.search);
+          const m       = p.get('mode') === 'title' ? 'title' : 'address';
+          const q       = p.get('q') || '';
+          const title   = p.get('title');
+          const tab     = p.get('tab') || 'summary';
+          const sortBy  = p.get('sort_by');
+          const sortDir = p.get('sort_dir');
+          const off     = parseInt(p.get('offset') || '0', 10);
+
+          setMode(m);
+          if (sortBy)  document.getElementById('sortBy').value  = sortBy;
+          if (sortDir) document.getElementById('sortDir').value = sortDir;
+          offset = Number.isFinite(off) ? off : 0;
+
+          if (m === 'title') {
+            document.getElementById('q').value = q;
+            if (q) await search();
+          } else {
+            document.getElementById('addrQ').value = q;
+            if (q) await searchByAddress();
+          }
+
+          if (title) {
+            await loadTitle(title);
+            if (tab && tab !== currentTab) {
+              setActiveTab(tab);
+              renderCurrentTab();
+            }
+          }
+        } finally {
+          isHydrating = false;
+        }
+      }
 
       // ── Utils ──────────────────────────────────────────────────────────
       function esc(v){ return (v ?? '').toString().replace(/[&<>"']/g, s=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[s])); }
@@ -497,6 +560,7 @@
         setActiveTab('summary');
         renderSummary();
         document.getElementById('status').textContent = `Loaded ${titleNo}`;
+        syncUrl(true);
       }
 
       // ── Title search ───────────────────────────────────────────────────
@@ -529,6 +593,7 @@
           resultsEl.appendChild(div);
         });
         document.getElementById('status').textContent = `${data.count || 0} result(s) (offset ${offset})`;
+        syncUrl(true);
       }
 
       // ── Address search ─────────────────────────────────────────────────
@@ -569,6 +634,7 @@
         });
 
         document.getElementById('addrStatus').textContent = `${data.count} result(s) — click an address to load its title`;
+        syncUrl(true);
       }
 
       // ── Instrument search ──────────────────────────────────────────────
@@ -612,11 +678,17 @@
         btn.onclick = () => {
           setActiveTab(btn.dataset.tab);
           renderCurrentTab();
+          syncUrl(false);
         };
       });
 
-      // Start in address search mode — no DB query until user searches
-      setMode('address');
+      document.getElementById('modeTitleBtn').onclick = () => { setMode('title');   syncUrl(false); };
+      document.getElementById('modeAddrBtn').onclick  = () => { setMode('address'); syncUrl(false); };
+
+      window.addEventListener('popstate', () => { hydrateFromUrl(); });
+
+      // Initial hydration from URL (falls back to address mode when no params).
+      hydrateFromUrl();
     </script>
   </body>
 </html>
