@@ -31,6 +31,8 @@
       .btn:hover { background:#2257c9; }
       .btn.secondary { background:#e8edf8; color:#2f6ae6; }
       .btn.secondary:hover { background:#d5defc; }
+      .btn:disabled, .btn[disabled] { opacity:.4; cursor:not-allowed; }
+      .btn:disabled:hover { background:#e8edf8; }
       .status { font-size:13px; color:#687086; padding: 0 14px 12px; }
 
       /* Address search bar */
@@ -43,6 +45,7 @@
       .item { padding:11px 14px; border-bottom:1px solid #edf0f6; cursor:pointer; }
       .item:hover { background:#f8faff; }
       .item.active { background:#eaf1ff; border-left:3px solid #2f6ae6; }
+      .item:focus-visible { outline:none; background:#eef4ff; box-shadow:inset 3px 0 0 #2f6ae6; }
       .item .title-tag { font-weight:600; font-size:14px; }
       .item .addr-tag { font-size:13px; color:#2f6ae6; margin-top:2px; }
       .muted { color:#687086; font-size:12px; }
@@ -60,6 +63,9 @@
       .tabs { display:flex; gap:6px; margin-bottom:10px; flex-wrap:wrap; }
       .tab { padding:7px 12px; border-radius:8px; border:1px solid #d7deef; background:#fff; cursor:pointer; font-size:13px; }
       .tab.active { background:#2f6ae6; color:#fff; border-color:#2f6ae6; }
+      .tab.tab-empty:not(.active) { color:#a0a7b8; background:#fafbfe; border-color:#e4e9f5; }
+      .tab .tab-count { font-weight:600; opacity:.75; margin-left:4px; }
+      .tab.tab-empty .tab-count { font-weight:400; }
       .panel { border:1px solid #e6eaf4; border-radius:10px; padding:10px; max-height:58vh; overflow:auto; }
       .row { padding:8px 0; border-bottom:1px solid #edf0f6; font-size:13px; }
       .row:last-child { border-bottom:0; }
@@ -69,6 +75,16 @@
       .addr-item { padding:10px 14px; border-bottom:1px solid #edf0f6; cursor:pointer; }
       .addr-item:hover { background:#f8faff; }
       .addr-item.active { background:#eaf1ff; border-left:3px solid #2f6ae6; }
+      .addr-item:focus-visible { outline:none; background:#eef4ff; box-shadow:inset 3px 0 0 #2f6ae6; }
+
+      /* Empty-state intro card */
+      .empty-state { padding:24px 20px; }
+      .empty-title { font-size:15px; font-weight:600; color:#1a2340; margin-bottom:6px; }
+      .empty-sub { font-size:13px; color:#687086; margin-bottom:14px; line-height:1.45; }
+      .empty-chips { display:flex; flex-wrap:wrap; gap:6px; }
+      .example-chip { padding:6px 12px; border:1px solid #c7d8ff; background:#f0f5ff; color:#2f6ae6; border-radius:16px; font-size:12px; cursor:pointer; font-family:inherit; }
+      .example-chip:hover { background:#dde9ff; }
+      .example-chip:focus-visible { outline:2px solid #2f6ae6; outline-offset:2px; }
       .addr-full { font-size:14px; font-weight:500; }
       .addr-meta { font-size:12px; color:#687086; margin-top:2px; }
 
@@ -111,8 +127,8 @@
 
       <!-- Search mode toggle -->
       <div class="search-modes">
-        <button class="mode-btn" id="modeTitleBtn" onclick="setMode('title')">Title / Instrument Search</button>
-        <button class="mode-btn active" id="modeAddrBtn" onclick="setMode('address')">🏠 Address Search</button>
+        <button class="mode-btn" id="modeTitleBtn">Title / Instrument Search</button>
+        <button class="mode-btn active" id="modeAddrBtn">🏠 Address Search</button>
       </div>
 
       <!-- Title search toolbar -->
@@ -131,8 +147,8 @@
             <option value="ASC">Asc</option>
           </select>
           <button class="btn" id="searchBtn">Search</button>
-          <button class="btn secondary" id="prevBtn">◀</button>
-          <button class="btn secondary" id="nextBtn">▶</button>
+          <button class="btn secondary" id="prevBtn" disabled>◀</button>
+          <button class="btn secondary" id="nextBtn" disabled>▶</button>
           <button class="btn secondary" id="csvBtn">Export CSV</button>
         </div>
         <div class="status" id="status">Ready</div>
@@ -142,7 +158,9 @@
       <div class="card" id="addrToolbar">
         <div class="addr-toolbar">
           <input id="addrQ" placeholder="e.g.  42 Willis Street, Wellington  or  Thorndon  or  6011" />
-          <button class="btn" onclick="searchByAddress()">Search</button>
+          <button class="btn" onclick="offsetAddr = 0; searchByAddress()">Search</button>
+          <button class="btn secondary" id="addrPrevBtn" disabled>◀</button>
+          <button class="btn secondary" id="addrNextBtn" disabled>▶</button>
         </div>
         <div class="status" id="addrStatus">Enter a street address, suburb or postcode</div>
       </div>
@@ -185,13 +203,99 @@
       let ancestors = { ancestors: [], count: 0 };
       let instrumentSearchResults = [];
       let offset = 0;
+      let offsetAddr = 0;
       const limit = 100;
       let currentTab = 'summary';
       let leafletMap = null;
       let leafletMarker = null;
+      // Suppress URL writes while rehydrating from location (popstate / initial load)
+      let isHydrating = false;
+
+      // ── URL state sync ─────────────────────────────────────────────────
+      function syncUrl(push = true){
+        if (isHydrating) return;
+        const p = new URLSearchParams();
+        p.set('mode', mode);
+        const qEl = mode === 'title' ? document.getElementById('q') : document.getElementById('addrQ');
+        const q = (qEl?.value || '').trim();
+        if (q) p.set('q', q);
+        if (selectedTitle) {
+          p.set('title', selectedTitle);
+          p.set('tab', currentTab);
+        }
+        if (mode === 'title') {
+          const sortBy  = document.getElementById('sortBy').value;
+          const sortDir = document.getElementById('sortDir').value;
+          if (sortBy  && sortBy  !== 'issue_date') p.set('sort_by',  sortBy);
+          if (sortDir && sortDir !== 'DESC')        p.set('sort_dir', sortDir);
+          if (offset) p.set('offset', String(offset));
+        } else if (offsetAddr) {
+          p.set('offset', String(offsetAddr));
+        }
+        const newUrl = `${location.pathname}?${p.toString()}`;
+        if (push) history.pushState(null, '', newUrl);
+        else      history.replaceState(null, '', newUrl);
+      }
+
+      async function hydrateFromUrl(){
+        isHydrating = true;
+        try {
+          const p = new URLSearchParams(location.search);
+          const m       = p.get('mode') === 'title' ? 'title' : 'address';
+          const q       = p.get('q') || '';
+          const title   = p.get('title');
+          const tab     = p.get('tab') || 'summary';
+          const sortBy  = p.get('sort_by');
+          const sortDir = p.get('sort_dir');
+          const off     = parseInt(p.get('offset') || '0', 10);
+
+          setMode(m);
+          if (sortBy)  document.getElementById('sortBy').value  = sortBy;
+          if (sortDir) document.getElementById('sortDir').value = sortDir;
+          const safeOff = Number.isFinite(off) ? off : 0;
+
+          if (m === 'title') {
+            offset = safeOff;
+            document.getElementById('q').value = q;
+            if (q) await search();
+          } else {
+            offsetAddr = safeOff;
+            document.getElementById('addrQ').value = q;
+            if (q) await searchByAddress();
+          }
+
+          if (title) {
+            await loadTitle(title);
+            if (tab && tab !== currentTab) {
+              setActiveTab(tab);
+              renderCurrentTab();
+            }
+          }
+        } finally {
+          isHydrating = false;
+        }
+      }
 
       // ── Utils ──────────────────────────────────────────────────────────
       function esc(v){ return (v ?? '').toString().replace(/[&<>"']/g, s=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[s])); }
+      function fmt(n){ return n.toLocaleString(); }
+
+      // "Showing 1–100 · more available" / "Showing 1–42 · end of results" / "No results"
+      function formatPageStatus(off, n, lim){
+        if (n === 0) return 'No results';
+        const first = off + 1;
+        const last  = off + n;
+        const more  = n === lim ? 'more available' : 'end of results';
+        return `Showing ${fmt(first)}–${fmt(last)} · ${more}`;
+      }
+
+      // Reflect the "can I go prev / next" heuristics onto the pager buttons.
+      function updatePagerState(prevId, nextId, off, n, lim){
+        const prev = document.getElementById(prevId);
+        const next = document.getElementById(nextId);
+        if (prev) prev.disabled = off === 0;
+        if (next) next.disabled = n < lim;   // partial page → definitely no more
+      }
 
       function badge(status, desc){
         const s = (status || '').toUpperCase();
@@ -202,13 +306,44 @@
       }
 
       // ── Mode switching ─────────────────────────────────────────────────
+      const EXAMPLES = {
+        address: [
+          '42 Willis Street, Wellington',
+          'Thorndon',
+          'Lambton Quay',
+          '6011',
+        ],
+        title: [
+          'Smith',
+          'Willis Street',
+          'Wellington',
+        ],
+      };
+
+      function renderEmptyState(){
+        const examples = EXAMPLES[mode] || [];
+        const subtitle = mode === 'address'
+          ? 'Search NZ land titles by address, suburb or postcode. Try an example:'
+          : 'Search by title number, address, appellation or owner. Try an example:';
+        const chips = examples.map(q =>
+          `<button class='example-chip' type='button' data-q="${esc(q)}">${esc(q)}</button>`
+        ).join('');
+        document.getElementById('results').innerHTML = `
+          <div class='empty-state'>
+            <div class='empty-title'>🗺 Start exploring</div>
+            <div class='empty-sub'>${esc(subtitle)}</div>
+            <div class='empty-chips'>${chips}</div>
+          </div>
+        `;
+      }
+
       function setMode(m){
         mode = m;
         document.getElementById('modeTitleBtn').classList.toggle('active', m === 'title');
         document.getElementById('modeAddrBtn').classList.toggle('active', m === 'address');
         document.getElementById('titleToolbar').style.display = m === 'title' ? '' : 'none';
         document.getElementById('addrToolbar').style.display  = m === 'address' ? '' : 'none';
-        document.getElementById('results').innerHTML = '';
+        renderEmptyState();
         if (m === 'address') document.getElementById('addrQ').focus();
         else document.getElementById('q').focus();
       }
@@ -226,6 +361,43 @@
         else if (currentTab === 'encumbrances')renderEncumbrances();
         else if (currentTab === 'lineage')     renderLineage();
         else if (currentTab === 'instrument-search') renderInstrumentSearch();
+      }
+
+      // ── Tab labels with counts ─────────────────────────────────────────
+      function renderTabs(){
+        const hasTitle = detail !== null;
+        const priorN   = (lineage.prior     || []).length;
+        const followN  = (lineage.follow_on || []).length;
+        const counts = {
+          'address':      titleAddresses.length,
+          'instruments':  instruments.length,
+          'encumbrances': encumbrances.length,
+          'lineage':      priorN + followN,
+        };
+        const customLabel = {
+          'lineage': (priorN + followN) > 0 ? `${priorN}↑/${followN}↓` : null,
+        };
+        const baseLabels = {
+          'summary':           'Summary',
+          'address':           'Address',
+          'instruments':       'Instruments',
+          'encumbrances':      'Encumbrances',
+          'lineage':           'Lineage',
+          'instrument-search': 'Instrument Search',
+        };
+        document.querySelectorAll('.tab').forEach(btn => {
+          const key   = btn.dataset.tab;
+          const base  = baseLabels[key] ?? key;
+          const count = counts[key];
+          if (!hasTitle || count === undefined) {
+            btn.textContent = base;
+            btn.classList.remove('tab-empty');
+            return;
+          }
+          const shown = customLabel[key] ?? String(count);
+          btn.innerHTML = `${esc(base)} <span class='tab-count'>(${esc(shown)})</span>`;
+          btn.classList.toggle('tab-empty', count === 0);
+        });
       }
 
       // ── KPIs ───────────────────────────────────────────────────────────
@@ -494,9 +666,11 @@
 
         document.getElementById('header').innerHTML = `<b>${esc(detail.title_no)}</b> ${badge(detail.title_status, detail.title_status_desc)} <span class='muted'>${esc(detail.title_type_desc || detail.title_type || '')} • ${esc(detail.land_district_name || '')}</span>`;
         renderKpis();
+        renderTabs();
         setActiveTab('summary');
         renderSummary();
         document.getElementById('status').textContent = `Loaded ${titleNo}`;
+        syncUrl(true);
       }
 
       // ── Title search ───────────────────────────────────────────────────
@@ -516,6 +690,8 @@
         (data.items || []).forEach(row => {
           const div = document.createElement('div');
           div.className = 'item';
+          div.tabIndex = -1;
+          div.setAttribute('role', 'option');
           div.innerHTML = `
             <div class='title-tag'>${esc(row.title_no)} ${badge(row.title_status, row.title_status_desc)}</div>
             <div class='muted'>${esc(row.title_type_desc || row.title_type || '')} • ${esc(row.register_type_desc || row.register_type || '')} • ${esc(row.issue_date ? row.issue_date.slice(0,10) : '—')}</div>
@@ -528,7 +704,10 @@
           };
           resultsEl.appendChild(div);
         });
-        document.getElementById('status').textContent = `${data.count || 0} result(s) (offset ${offset})`;
+        const n = (data.items || []).length;
+        document.getElementById('status').textContent = formatPageStatus(offset, n, limit);
+        updatePagerState('prevBtn', 'nextBtn', offset, n, limit);
+        syncUrl(true);
       }
 
       // ── Address search ─────────────────────────────────────────────────
@@ -538,7 +717,7 @@
 
         let data;
         try {
-          data = await fetch(`/api/address/search?q=${encodeURIComponent(q)}&limit=100`).then(r=>r.json());
+          data = await fetch(`/api/address/search?q=${encodeURIComponent(q)}&limit=${limit}&offset=${offsetAddr}`).then(r=>r.json());
         } catch { document.getElementById('addrStatus').textContent = 'Search failed'; return; }
 
         const resultsEl = document.getElementById('results');
@@ -546,13 +725,18 @@
 
         if (!data.items || !data.items.length) {
           resultsEl.innerHTML = `<div class='muted' style='padding:14px'>No addresses found for "${esc(q)}"</div>`;
-          document.getElementById('addrStatus').textContent = 'No results';
+          document.getElementById('addrStatus').textContent =
+            offsetAddr > 0 ? 'No more results — use ◀ to go back' : 'No results';
+          updatePagerState('addrPrevBtn', 'addrNextBtn', offsetAddr, 0, limit);
+          syncUrl(true);
           return;
         }
 
         data.items.forEach(row => {
           const div = document.createElement('div');
           div.className = 'addr-item';
+          div.tabIndex = -1;
+          div.setAttribute('role', 'option');
           div.innerHTML = `
             <div class='addr-full'>📍 ${esc(row.full_address)}</div>
             <div class='addr-meta'>Title: <b>${esc(row.title_no || '—')}</b> | Parcel: ${esc(row.parcel_id || '—')}</div>
@@ -568,7 +752,11 @@
           resultsEl.appendChild(div);
         });
 
-        document.getElementById('addrStatus').textContent = `${data.count} result(s) — click an address to load its title`;
+        const n = (data.items || []).length;
+        document.getElementById('addrStatus').textContent =
+          `${formatPageStatus(offsetAddr, n, limit)} — click an address to load its title`;
+        updatePagerState('addrPrevBtn', 'addrNextBtn', offsetAddr, n, limit);
+        syncUrl(true);
       }
 
       // ── Instrument search ──────────────────────────────────────────────
@@ -600,23 +788,102 @@
         window.location.href = `/api/instruments/search.csv?q=${encodeURIComponent(iq)}&limit=5000`;
       };
 
+      // ── Keyboard navigation ────────────────────────────────────────────
+      function focusSearchInput(){
+        const el = mode === 'title' ? document.getElementById('q') : document.getElementById('addrQ');
+        el?.focus();
+      }
+      function listItems(){
+        return document.getElementById('results').querySelectorAll('.item, .addr-item');
+      }
+      function handleListKeydown(e){
+        if (e.isComposing) return;
+        const items = listItems();
+        if (!items.length) return;
+        const idx = [...items].indexOf(document.activeElement);
+        if (idx < 0) return;
+        if (e.key === 'ArrowDown') {
+          e.preventDefault();
+          items[Math.min(idx + 1, items.length - 1)].focus();
+        } else if (e.key === 'ArrowUp') {
+          e.preventDefault();
+          if (idx === 0) focusSearchInput();
+          else items[idx - 1].focus();
+        } else if (e.key === 'Enter') {
+          e.preventDefault();
+          items[idx].click();
+        } else if (e.key === 'Escape') {
+          e.preventDefault();
+          focusSearchInput();
+        }
+      }
+      function handleInputArrowDown(e){
+        if (e.isComposing) return;
+        if (e.key === 'ArrowDown') {
+          const items = listItems();
+          if (!items.length) return;
+          e.preventDefault();
+          items[0].focus();
+        } else if (e.key === 'Escape' && e.target.value) {
+          e.preventDefault();
+          e.target.value = '';
+        }
+      }
+      document.getElementById('results').addEventListener('keydown', handleListKeydown);
+
+      // Example-chip click: populate the active input and trigger the search.
+      document.getElementById('results').addEventListener('click', e => {
+        const chip = e.target.closest('.example-chip');
+        if (!chip) return;
+        const q = chip.dataset.q || '';
+        if (mode === 'address') {
+          document.getElementById('addrQ').value = q;
+          offsetAddr = 0;
+          searchByAddress();
+        } else {
+          document.getElementById('q').value = q;
+          offset = 0;
+          search();
+        }
+      });
+      document.getElementById('q').addEventListener('keydown', handleInputArrowDown);
+      document.getElementById('addrQ').addEventListener('keydown', handleInputArrowDown);
+
+      // "/" focuses the active search input — vimium-style shortcut
+      document.addEventListener('keydown', e => {
+        if (e.key !== '/' || e.isComposing || e.metaKey || e.ctrlKey || e.altKey) return;
+        const a = document.activeElement;
+        if (a && (a.tagName === 'INPUT' || a.tagName === 'TEXTAREA' || a.isContentEditable)) return;
+        e.preventDefault();
+        focusSearchInput();
+      });
+
       // ── Event listeners ────────────────────────────────────────────────
       document.getElementById('searchBtn').onclick = () => { offset = 0; search(); };
       document.getElementById('prevBtn').onclick = () => { offset = Math.max(0, offset - limit); search(); };
       document.getElementById('nextBtn').onclick = () => { offset += limit; search(); };
       document.getElementById('csvBtn').onclick = exportCsv;
-      document.getElementById('q').addEventListener('keydown', e => { if (e.key === 'Enter') search(); });
-      document.getElementById('addrQ')?.addEventListener('keydown', e => { if (e.key === 'Enter') searchByAddress(); });
+      document.getElementById('q').addEventListener('keydown', e => { if (e.key === 'Enter') { offset = 0; search(); } });
+
+      document.getElementById('addrPrevBtn').onclick = () => { offsetAddr = Math.max(0, offsetAddr - limit); searchByAddress(); };
+      document.getElementById('addrNextBtn').onclick = () => { offsetAddr += limit; searchByAddress(); };
+      document.getElementById('addrQ')?.addEventListener('keydown', e => { if (e.key === 'Enter') { offsetAddr = 0; searchByAddress(); } });
 
       document.querySelectorAll('.tab').forEach(btn => {
         btn.onclick = () => {
           setActiveTab(btn.dataset.tab);
           renderCurrentTab();
+          syncUrl(false);
         };
       });
 
-      // Start in address search mode — no DB query until user searches
-      setMode('address');
+      document.getElementById('modeTitleBtn').onclick = () => { setMode('title');   syncUrl(false); };
+      document.getElementById('modeAddrBtn').onclick  = () => { setMode('address'); syncUrl(false); };
+
+      window.addEventListener('popstate', () => { hydrateFromUrl(); });
+
+      // Initial hydration from URL (falls back to address mode when no params).
+      hydrateFromUrl();
     </script>
   </body>
 </html>
