@@ -45,6 +45,7 @@
       .item { padding:11px 14px; border-bottom:1px solid #edf0f6; cursor:pointer; }
       .item:hover { background:#f8faff; }
       .item.active { background:#eaf1ff; border-left:3px solid #2f6ae6; }
+      .item:focus-visible { outline:none; background:#eef4ff; box-shadow:inset 3px 0 0 #2f6ae6; }
       .item .title-tag { font-weight:600; font-size:14px; }
       .item .addr-tag { font-size:13px; color:#2f6ae6; margin-top:2px; }
       .muted { color:#687086; font-size:12px; }
@@ -74,6 +75,7 @@
       .addr-item { padding:10px 14px; border-bottom:1px solid #edf0f6; cursor:pointer; }
       .addr-item:hover { background:#f8faff; }
       .addr-item.active { background:#eaf1ff; border-left:3px solid #2f6ae6; }
+      .addr-item:focus-visible { outline:none; background:#eef4ff; box-shadow:inset 3px 0 0 #2f6ae6; }
       .addr-full { font-size:14px; font-weight:500; }
       .addr-meta { font-size:12px; color:#687086; margin-top:2px; }
 
@@ -648,6 +650,8 @@
         (data.items || []).forEach(row => {
           const div = document.createElement('div');
           div.className = 'item';
+          div.tabIndex = -1;
+          div.setAttribute('role', 'option');
           div.innerHTML = `
             <div class='title-tag'>${esc(row.title_no)} ${badge(row.title_status, row.title_status_desc)}</div>
             <div class='muted'>${esc(row.title_type_desc || row.title_type || '')} • ${esc(row.register_type_desc || row.register_type || '')} • ${esc(row.issue_date ? row.issue_date.slice(0,10) : '—')}</div>
@@ -691,6 +695,8 @@
         data.items.forEach(row => {
           const div = document.createElement('div');
           div.className = 'addr-item';
+          div.tabIndex = -1;
+          div.setAttribute('role', 'option');
           div.innerHTML = `
             <div class='addr-full'>📍 ${esc(row.full_address)}</div>
             <div class='addr-meta'>Title: <b>${esc(row.title_no || '—')}</b> | Parcel: ${esc(row.parcel_id || '—')}</div>
@@ -741,6 +747,60 @@
         const iq = (document.getElementById('instQ')?.value || '').trim();
         window.location.href = `/api/instruments/search.csv?q=${encodeURIComponent(iq)}&limit=5000`;
       };
+
+      // ── Keyboard navigation ────────────────────────────────────────────
+      function focusSearchInput(){
+        const el = mode === 'title' ? document.getElementById('q') : document.getElementById('addrQ');
+        el?.focus();
+      }
+      function listItems(){
+        return document.getElementById('results').querySelectorAll('.item, .addr-item');
+      }
+      function handleListKeydown(e){
+        if (e.isComposing) return;
+        const items = listItems();
+        if (!items.length) return;
+        const idx = [...items].indexOf(document.activeElement);
+        if (idx < 0) return;
+        if (e.key === 'ArrowDown') {
+          e.preventDefault();
+          items[Math.min(idx + 1, items.length - 1)].focus();
+        } else if (e.key === 'ArrowUp') {
+          e.preventDefault();
+          if (idx === 0) focusSearchInput();
+          else items[idx - 1].focus();
+        } else if (e.key === 'Enter') {
+          e.preventDefault();
+          items[idx].click();
+        } else if (e.key === 'Escape') {
+          e.preventDefault();
+          focusSearchInput();
+        }
+      }
+      function handleInputArrowDown(e){
+        if (e.isComposing) return;
+        if (e.key === 'ArrowDown') {
+          const items = listItems();
+          if (!items.length) return;
+          e.preventDefault();
+          items[0].focus();
+        } else if (e.key === 'Escape' && e.target.value) {
+          e.preventDefault();
+          e.target.value = '';
+        }
+      }
+      document.getElementById('results').addEventListener('keydown', handleListKeydown);
+      document.getElementById('q').addEventListener('keydown', handleInputArrowDown);
+      document.getElementById('addrQ').addEventListener('keydown', handleInputArrowDown);
+
+      // "/" focuses the active search input — vimium-style shortcut
+      document.addEventListener('keydown', e => {
+        if (e.key !== '/' || e.isComposing || e.metaKey || e.ctrlKey || e.altKey) return;
+        const a = document.activeElement;
+        if (a && (a.tagName === 'INPUT' || a.tagName === 'TEXTAREA' || a.isContentEditable)) return;
+        e.preventDefault();
+        focusSearchInput();
+      });
 
       // ── Event listeners ────────────────────────────────────────────────
       document.getElementById('searchBtn').onclick = () => { offset = 0; search(); };
