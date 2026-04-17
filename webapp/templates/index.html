@@ -31,6 +31,8 @@
       .btn:hover { background:#2257c9; }
       .btn.secondary { background:#e8edf8; color:#2f6ae6; }
       .btn.secondary:hover { background:#d5defc; }
+      .btn:disabled, .btn[disabled] { opacity:.4; cursor:not-allowed; }
+      .btn:disabled:hover { background:#e8edf8; }
       .status { font-size:13px; color:#687086; padding: 0 14px 12px; }
 
       /* Address search bar */
@@ -131,8 +133,8 @@
             <option value="ASC">Asc</option>
           </select>
           <button class="btn" id="searchBtn">Search</button>
-          <button class="btn secondary" id="prevBtn">◀</button>
-          <button class="btn secondary" id="nextBtn">▶</button>
+          <button class="btn secondary" id="prevBtn" disabled>◀</button>
+          <button class="btn secondary" id="nextBtn" disabled>▶</button>
           <button class="btn secondary" id="csvBtn">Export CSV</button>
         </div>
         <div class="status" id="status">Ready</div>
@@ -142,7 +144,9 @@
       <div class="card" id="addrToolbar">
         <div class="addr-toolbar">
           <input id="addrQ" placeholder="e.g.  42 Willis Street, Wellington  or  Thorndon  or  6011" />
-          <button class="btn" onclick="searchByAddress()">Search</button>
+          <button class="btn" onclick="offsetAddr = 0; searchByAddress()">Search</button>
+          <button class="btn secondary" id="addrPrevBtn" disabled>◀</button>
+          <button class="btn secondary" id="addrNextBtn" disabled>▶</button>
         </div>
         <div class="status" id="addrStatus">Enter a street address, suburb or postcode</div>
       </div>
@@ -185,6 +189,7 @@
       let ancestors = { ancestors: [], count: 0 };
       let instrumentSearchResults = [];
       let offset = 0;
+      let offsetAddr = 0;
       const limit = 100;
       let currentTab = 'summary';
       let leafletMap = null;
@@ -210,6 +215,8 @@
           if (sortBy  && sortBy  !== 'issue_date') p.set('sort_by',  sortBy);
           if (sortDir && sortDir !== 'DESC')        p.set('sort_dir', sortDir);
           if (offset) p.set('offset', String(offset));
+        } else if (offsetAddr) {
+          p.set('offset', String(offsetAddr));
         }
         const newUrl = `${location.pathname}?${p.toString()}`;
         if (push) history.pushState(null, '', newUrl);
@@ -231,12 +238,14 @@
           setMode(m);
           if (sortBy)  document.getElementById('sortBy').value  = sortBy;
           if (sortDir) document.getElementById('sortDir').value = sortDir;
-          offset = Number.isFinite(off) ? off : 0;
+          const safeOff = Number.isFinite(off) ? off : 0;
 
           if (m === 'title') {
+            offset = safeOff;
             document.getElementById('q').value = q;
             if (q) await search();
           } else {
+            offsetAddr = safeOff;
             document.getElementById('addrQ').value = q;
             if (q) await searchByAddress();
           }
@@ -255,6 +264,24 @@
 
       // ── Utils ──────────────────────────────────────────────────────────
       function esc(v){ return (v ?? '').toString().replace(/[&<>"']/g, s=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[s])); }
+      function fmt(n){ return n.toLocaleString(); }
+
+      // "Showing 1–100 · more available" / "Showing 1–42 · end of results" / "No results"
+      function formatPageStatus(off, n, lim){
+        if (n === 0) return 'No results';
+        const first = off + 1;
+        const last  = off + n;
+        const more  = n === lim ? 'more available' : 'end of results';
+        return `Showing ${fmt(first)}–${fmt(last)} · ${more}`;
+      }
+
+      // Reflect the "can I go prev / next" heuristics onto the pager buttons.
+      function updatePagerState(prevId, nextId, off, n, lim){
+        const prev = document.getElementById(prevId);
+        const next = document.getElementById(nextId);
+        if (prev) prev.disabled = off === 0;
+        if (next) next.disabled = n < lim;   // partial page → definitely no more
+      }
 
       function badge(status, desc){
         const s = (status || '').toUpperCase();
@@ -592,7 +619,9 @@
           };
           resultsEl.appendChild(div);
         });
-        document.getElementById('status').textContent = `${data.count || 0} result(s) (offset ${offset})`;
+        const n = (data.items || []).length;
+        document.getElementById('status').textContent = formatPageStatus(offset, n, limit);
+        updatePagerState('prevBtn', 'nextBtn', offset, n, limit);
         syncUrl(true);
       }
 
@@ -603,7 +632,7 @@
 
         let data;
         try {
-          data = await fetch(`/api/address/search?q=${encodeURIComponent(q)}&limit=100`).then(r=>r.json());
+          data = await fetch(`/api/address/search?q=${encodeURIComponent(q)}&limit=${limit}&offset=${offsetAddr}`).then(r=>r.json());
         } catch { document.getElementById('addrStatus').textContent = 'Search failed'; return; }
 
         const resultsEl = document.getElementById('results');
@@ -611,7 +640,10 @@
 
         if (!data.items || !data.items.length) {
           resultsEl.innerHTML = `<div class='muted' style='padding:14px'>No addresses found for "${esc(q)}"</div>`;
-          document.getElementById('addrStatus').textContent = 'No results';
+          document.getElementById('addrStatus').textContent =
+            offsetAddr > 0 ? 'No more results — use ◀ to go back' : 'No results';
+          updatePagerState('addrPrevBtn', 'addrNextBtn', offsetAddr, 0, limit);
+          syncUrl(true);
           return;
         }
 
@@ -633,7 +665,10 @@
           resultsEl.appendChild(div);
         });
 
-        document.getElementById('addrStatus').textContent = `${data.count} result(s) — click an address to load its title`;
+        const n = (data.items || []).length;
+        document.getElementById('addrStatus').textContent =
+          `${formatPageStatus(offsetAddr, n, limit)} — click an address to load its title`;
+        updatePagerState('addrPrevBtn', 'addrNextBtn', offsetAddr, n, limit);
         syncUrl(true);
       }
 
@@ -671,8 +706,11 @@
       document.getElementById('prevBtn').onclick = () => { offset = Math.max(0, offset - limit); search(); };
       document.getElementById('nextBtn').onclick = () => { offset += limit; search(); };
       document.getElementById('csvBtn').onclick = exportCsv;
-      document.getElementById('q').addEventListener('keydown', e => { if (e.key === 'Enter') search(); });
-      document.getElementById('addrQ')?.addEventListener('keydown', e => { if (e.key === 'Enter') searchByAddress(); });
+      document.getElementById('q').addEventListener('keydown', e => { if (e.key === 'Enter') { offset = 0; search(); } });
+
+      document.getElementById('addrPrevBtn').onclick = () => { offsetAddr = Math.max(0, offsetAddr - limit); searchByAddress(); };
+      document.getElementById('addrNextBtn').onclick = () => { offsetAddr += limit; searchByAddress(); };
+      document.getElementById('addrQ')?.addEventListener('keydown', e => { if (e.key === 'Enter') { offsetAddr = 0; searchByAddress(); } });
 
       document.querySelectorAll('.tab').forEach(btn => {
         btn.onclick = () => {

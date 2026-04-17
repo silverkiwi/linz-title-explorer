@@ -243,7 +243,7 @@ _ROAD_TYPE_SUFFIXES = {
 }
 
 
-def _build_address_search_query(q: str, limit: int) -> str:
+def _build_address_search_query(q: str, limit: int, offset: int = 0) -> str:
     # Query the materialised table (GOLD.DIM_ADDRESS_SEARCH) rather than the
     # view.  The table pre-computes full_address_norm / road_name_norm /
     # street_number_norm / unit_value_norm (lowercase + macrons stripped) so:
@@ -314,6 +314,7 @@ def _build_address_search_query(q: str, limit: int) -> str:
     {where}
     ORDER BY FULL_ADDRESS
     LIMIT {limit}
+    OFFSET {offset}
     """
 
 
@@ -358,10 +359,11 @@ def search_csv():
 
 @app.get("/api/address/search")
 def address_search():
-    q     = (request.args.get("q") or "").strip()
-    limit = _to_int(request.args.get("limit"), default=50, min_v=1, max_v=500)
-    out   = _query(_build_address_search_query(q, limit))
-    return jsonify({"count": len(out), "items": out})
+    q      = (request.args.get("q") or "").strip()
+    limit  = _to_int(request.args.get("limit"),  default=50, min_v=1, max_v=500)
+    offset = _to_int(request.args.get("offset"), default=0,  min_v=0, max_v=100_000)
+    out    = _query(_build_address_search_query(q, limit, offset))
+    return jsonify({"count": len(out), "items": out, "limit": limit, "offset": offset})
 
 
 def _require_title_no():
