@@ -62,6 +62,9 @@
       .tabs { display:flex; gap:6px; margin-bottom:10px; flex-wrap:wrap; }
       .tab { padding:7px 12px; border-radius:8px; border:1px solid #d7deef; background:#fff; cursor:pointer; font-size:13px; }
       .tab.active { background:#2f6ae6; color:#fff; border-color:#2f6ae6; }
+      .tab.tab-empty:not(.active) { color:#a0a7b8; background:#fafbfe; border-color:#e4e9f5; }
+      .tab .tab-count { font-weight:600; opacity:.75; margin-left:4px; }
+      .tab.tab-empty .tab-count { font-weight:400; }
       .panel { border:1px solid #e6eaf4; border-radius:10px; padding:10px; max-height:58vh; overflow:auto; }
       .row { padding:8px 0; border-bottom:1px solid #edf0f6; font-size:13px; }
       .row:last-child { border-bottom:0; }
@@ -316,6 +319,43 @@
         else if (currentTab === 'encumbrances')renderEncumbrances();
         else if (currentTab === 'lineage')     renderLineage();
         else if (currentTab === 'instrument-search') renderInstrumentSearch();
+      }
+
+      // ── Tab labels with counts ─────────────────────────────────────────
+      function renderTabs(){
+        const hasTitle = detail !== null;
+        const priorN   = (lineage.prior     || []).length;
+        const followN  = (lineage.follow_on || []).length;
+        const counts = {
+          'address':      titleAddresses.length,
+          'instruments':  instruments.length,
+          'encumbrances': encumbrances.length,
+          'lineage':      priorN + followN,
+        };
+        const customLabel = {
+          'lineage': (priorN + followN) > 0 ? `${priorN}↑/${followN}↓` : null,
+        };
+        const baseLabels = {
+          'summary':           'Summary',
+          'address':           'Address',
+          'instruments':       'Instruments',
+          'encumbrances':      'Encumbrances',
+          'lineage':           'Lineage',
+          'instrument-search': 'Instrument Search',
+        };
+        document.querySelectorAll('.tab').forEach(btn => {
+          const key   = btn.dataset.tab;
+          const base  = baseLabels[key] ?? key;
+          const count = counts[key];
+          if (!hasTitle || count === undefined) {
+            btn.textContent = base;
+            btn.classList.remove('tab-empty');
+            return;
+          }
+          const shown = customLabel[key] ?? String(count);
+          btn.innerHTML = `${esc(base)} <span class='tab-count'>(${esc(shown)})</span>`;
+          btn.classList.toggle('tab-empty', count === 0);
+        });
       }
 
       // ── KPIs ───────────────────────────────────────────────────────────
@@ -584,6 +624,7 @@
 
         document.getElementById('header').innerHTML = `<b>${esc(detail.title_no)}</b> ${badge(detail.title_status, detail.title_status_desc)} <span class='muted'>${esc(detail.title_type_desc || detail.title_type || '')} • ${esc(detail.land_district_name || '')}</span>`;
         renderKpis();
+        renderTabs();
         setActiveTab('summary');
         renderSummary();
         document.getElementById('status').textContent = `Loaded ${titleNo}`;
