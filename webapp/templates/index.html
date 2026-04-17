@@ -76,6 +76,15 @@
       .addr-item:hover { background:#f8faff; }
       .addr-item.active { background:#eaf1ff; border-left:3px solid #2f6ae6; }
       .addr-item:focus-visible { outline:none; background:#eef4ff; box-shadow:inset 3px 0 0 #2f6ae6; }
+
+      /* Empty-state intro card */
+      .empty-state { padding:24px 20px; }
+      .empty-title { font-size:15px; font-weight:600; color:#1a2340; margin-bottom:6px; }
+      .empty-sub { font-size:13px; color:#687086; margin-bottom:14px; line-height:1.45; }
+      .empty-chips { display:flex; flex-wrap:wrap; gap:6px; }
+      .example-chip { padding:6px 12px; border:1px solid #c7d8ff; background:#f0f5ff; color:#2f6ae6; border-radius:16px; font-size:12px; cursor:pointer; font-family:inherit; }
+      .example-chip:hover { background:#dde9ff; }
+      .example-chip:focus-visible { outline:2px solid #2f6ae6; outline-offset:2px; }
       .addr-full { font-size:14px; font-weight:500; }
       .addr-meta { font-size:12px; color:#687086; margin-top:2px; }
 
@@ -297,13 +306,44 @@
       }
 
       // ── Mode switching ─────────────────────────────────────────────────
+      const EXAMPLES = {
+        address: [
+          '42 Willis Street, Wellington',
+          'Thorndon',
+          'Lambton Quay',
+          '6011',
+        ],
+        title: [
+          'Smith',
+          'Willis Street',
+          'Wellington',
+        ],
+      };
+
+      function renderEmptyState(){
+        const examples = EXAMPLES[mode] || [];
+        const subtitle = mode === 'address'
+          ? 'Search NZ land titles by address, suburb or postcode. Try an example:'
+          : 'Search by title number, address, appellation or owner. Try an example:';
+        const chips = examples.map(q =>
+          `<button class='example-chip' type='button' data-q="${esc(q)}">${esc(q)}</button>`
+        ).join('');
+        document.getElementById('results').innerHTML = `
+          <div class='empty-state'>
+            <div class='empty-title'>🗺 Start exploring</div>
+            <div class='empty-sub'>${esc(subtitle)}</div>
+            <div class='empty-chips'>${chips}</div>
+          </div>
+        `;
+      }
+
       function setMode(m){
         mode = m;
         document.getElementById('modeTitleBtn').classList.toggle('active', m === 'title');
         document.getElementById('modeAddrBtn').classList.toggle('active', m === 'address');
         document.getElementById('titleToolbar').style.display = m === 'title' ? '' : 'none';
         document.getElementById('addrToolbar').style.display  = m === 'address' ? '' : 'none';
-        document.getElementById('results').innerHTML = '';
+        renderEmptyState();
         if (m === 'address') document.getElementById('addrQ').focus();
         else document.getElementById('q').focus();
       }
@@ -790,6 +830,22 @@
         }
       }
       document.getElementById('results').addEventListener('keydown', handleListKeydown);
+
+      // Example-chip click: populate the active input and trigger the search.
+      document.getElementById('results').addEventListener('click', e => {
+        const chip = e.target.closest('.example-chip');
+        if (!chip) return;
+        const q = chip.dataset.q || '';
+        if (mode === 'address') {
+          document.getElementById('addrQ').value = q;
+          offsetAddr = 0;
+          searchByAddress();
+        } else {
+          document.getElementById('q').value = q;
+          offset = 0;
+          search();
+        }
+      });
       document.getElementById('q').addEventListener('keydown', handleInputArrowDown);
       document.getElementById('addrQ').addEventListener('keydown', handleInputArrowDown);
 
